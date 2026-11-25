@@ -24,7 +24,7 @@ Core design (all state in MongoDB/Redis, any instance can die at any line):
 - **End-to-end encrypted notes**: not built (no PROTOCOL.md). Agents cannot leave private notes yet.
 - **Elasticsearch search**: not built. There is no message search.
 - **Billing bonus (Paybox)**: not built.
-- **UI**: functional, not polished. On any live change it refetches the visible lists instead of patching
+- **UI**: shadcn/ui components (Tailwind v4) with inbox filters, live status badges and claim-to-reply. On any live change it refetches the visible lists instead of patching
   state; simple and correct, but more requests than necessary. A thread shows the latest 500 messages.
 
 ## Decisions where the brief was silent
@@ -45,6 +45,9 @@ Core design (all state in MongoDB/Redis, any instance can die at any line):
   is never produced (the message itself is stored and visible on refresh). Fix: an `emitted` flag swept on boot.
 - The pacer uses fixed spacing and no burst, so a burst of N replies takes about N/4 seconds to go out.
 - Sessions are not refreshed when a user's workspace membership changes at the IdP until they sign in again.
+- Unique indexes are created at boot and again on every reset. If MongoDB is wiped while a server keeps
+  running (seen once in development when the container was recreated), duplicates can slip in until the next
+  reset or restart; a restart then refuses to become ready until they are removed, rather than run unprotected.
 - Redis is treated as durable enough for sessions and pacing; a Redis restart signs everyone out.
 - No CSRF token: cookies are `SameSite=Lax` and state-changing routes are JSON POSTs, which blocks the usual
   cross-site form attack, but a stricter setup would add an explicit token.

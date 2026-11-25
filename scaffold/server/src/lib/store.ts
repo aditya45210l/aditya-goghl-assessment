@@ -63,4 +63,7 @@ export async function deleteAllData() {
     const keys = await redis.keys(pattern); // few keys, so KEYS is fine here
     if (keys.length) await redis.del(...keys);
   }
+  // If MongoDB lost its data (e.g. the container was recreated), the unique indexes that make
+  // duplicates impossible are gone too. Recreate them now, while the collections are empty.
+  await ensureIndexes();
 }

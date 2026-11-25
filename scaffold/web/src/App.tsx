@@ -1,9 +1,13 @@
 import { useEffect, useState } from 'react';
+import { Inbox as InboxIcon, LogOut, MessagesSquare } from 'lucide-react';
 import { api, type Me } from './api';
 import { Inbox } from './Inbox';
 import { Thread } from './Thread';
-import { useLiveEvents, type LiveFrame } from './useLiveEvents';
-import './styles.css';
+import { useLiveEvents } from './useLiveEvents';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Avatar } from '@/components/ui/avatar';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 
 export function App() {
   const [me, setMe] = useState<Me | null>(null);
@@ -20,41 +24,74 @@ export function App() {
   }, []);
 
   // any live change (new message, status, assignment) refreshes the visible data
-  const connected = useLiveEvents(workspace, (_frame: LiveFrame) => setRefreshKey((k) => k + 1));
+  const connected = useLiveEvents(workspace, () => setRefreshKey((k) => k + 1));
 
-  if (loading) return <main className="center">Loading…</main>;
-  if (!me) {
-    return (
-      <main className="center">
-        <h1>Switchboard</h1>
-        <p className="muted">Shared inbox for your support team.</p>
-        <a className="button" href="/auth/login">Sign in</a>
-      </main>
-    );
-  }
+  if (loading) return <div className="grid min-h-screen place-items-center text-muted-foreground">Loading…</div>;
+  if (!me) return <SignIn />;
 
   const role = me.workspaces.find((w) => w.id === workspace)?.role ?? 'agent';
+  const switchWorkspace = (id: string) => { setWorkspace(id); setSelected(null); };
 
   return (
-    <div className="app">
-      <nav className="top">
-        <strong>Switchboard</strong>
-        <select value={workspace ?? ''} onChange={(e) => { setWorkspace(e.target.value); setSelected(null); }}>
-          {me.workspaces.map((w) => <option key={w.id} value={w.id}>{w.id} ({w.role})</option>)}
+    <div className="flex h-screen flex-col">
+      <header className="flex h-14 shrink-0 items-center gap-3 border-b px-4">
+        <div className="flex items-center gap-2 font-semibold">
+          <MessagesSquare className="size-5" /> Switchboard
+        </div>
+        <select
+          aria-label="Workspace"
+          className="h-8 rounded-md border bg-transparent px-2 text-sm shadow-xs"
+          value={workspace ?? ''}
+          onChange={(e) => switchWorkspace(e.target.value)}
+        >
+          {me.workspaces.map((w) => <option key={w.id} value={w.id}>{w.id}</option>)}
         </select>
-        <span className={connected ? 'live on' : 'live'}>{connected ? 'live' : 'reconnecting…'}</span>
-        <span className="spacer" />
-        <span className="muted">{me.name ?? me.sub}</span>
-        <button onClick={async () => { await api.logout(); location.reload(); }}>Sign out</button>
-      </nav>
+        <Badge variant="outline" className="capitalize">{role}</Badge>
+        <Badge variant={connected ? 'success' : 'warning'}>
+          <span className={'size-1.5 rounded-full ' + (connected ? 'bg-success' : 'bg-warning')} />
+          {connected ? 'Live' : 'Reconnecting'}
+        </Badge>
+        <div className="ml-auto flex items-center gap-3">
+          <Avatar label={me.name ?? me.sub} className="size-8" />
+          <span className="hidden text-sm sm:inline">{me.name ?? me.sub}</span>
+          <Button variant="ghost" size="icon" title="Sign out" onClick={async () => { await api.logout(); location.reload(); }}>
+            <LogOut />
+          </Button>
+        </div>
+      </header>
+
       {workspace && (
-        <div className="main">
-          <Inbox workspace={workspace} selected={selected} onSelect={setSelected} refreshKey={refreshKey} />
-          {selected
-            ? <Thread workspace={workspace} contact={selected} me={me.sub} role={role} refreshKey={refreshKey} />
-            : <section className="thread center muted">Pick a conversation</section>}
+        <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+          <Inbox workspace={workspace} me={me.sub} selected={selected} onSelect={setSelected} refreshKey={refreshKey} />
+          {selected ? (
+            <Thread key={workspace + selected} workspace={workspace} contact={selected} me={me.sub} role={role} refreshKey={refreshKey} />
+          ) : (
+            <div className="hidden flex-1 flex-col items-center justify-center gap-2 text-muted-foreground md:flex">
+              <InboxIcon className="size-10 opacity-40" />
+              <p className="text-sm">Select a conversation to read and reply.</p>
+            </div>
+          )}
         </div>
       )}
+    </div>
+  );
+}
+
+function SignIn() {
+  return (
+    <div className="grid min-h-screen place-items-center bg-muted/40 p-4">
+      <Card className="w-full max-w-sm">
+        <CardHeader className="items-center text-center">
+          <MessagesSquare className="mb-2 size-8" />
+          <CardTitle className="text-xl">Switchboard</CardTitle>
+          <CardDescription>The shared inbox for your support team.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Button asChild className="w-full">
+            <a href="/auth/login">Sign in</a>
+          </Button>
+        </CardContent>
+      </Card>
     </div>
   );
 }
