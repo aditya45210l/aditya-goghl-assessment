@@ -1,7 +1,9 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { config } from '../config.js';
 import { handle, safeEqual, sendError } from '../lib/http.js';
-import { collections, deleteAllData } from '../lib/store.js';
+import { collections, deleteAllData, isKnownWorkspace } from '../lib/store.js';
+import { enqueueReply } from '../lib/outbox.js';
+import { claimConversation } from '../lib/conversations.js';
 
 export const graderRouter = Router();
 
@@ -41,5 +43,32 @@ graderRouter.get(
       wsOf(m.workspace).outbound[m.key] = m.status;
     }
     res.status(200).json({ workspaces });
+  }),
+);
+
+const isText = (v: unknown, max = 4096): v is string => typeof v === 'string' && v.length > 0 && v.length <= max;
+
+// Same code path as an agent replying in the UI.
+graderRouter.post(
+  '/__grader/reply',
+  handle(async (req, res) => {
+    const { workspace, contact, text, client_ref } = req.body ?? {};
+    if (!isKnownWorkspace(workspace)) return sendError(res, 404, 'unknown workspace');
+    if (!isText(contact, 64) || !isText(text) || !isText(client_ref, 200)) return sendError(res, 400, 'contact, text and client_ref are required');
+    await enqueueReply(workspace, contact, text, client_ref);
+    res.status(202).json({ ok: true, client_ref });
+  }),
+);
+
+// Same code path as an agent clicking "claim" in the UI.
+graderRouter.post(
+  '/__grader/claim',
+  handle(async (req, res) => {
+    const { workspace, contact, agent } = req.body ?? {};
+    if (!isKnownWorkspace(workspace)) return sendError(res, 404, 'unknown workspace');
+    if (!isText(contact, 64) || !isText(agent, 200)) return sendError(res, 400, 'contact and agent are required');
+    const won = await claimConversation(workspace, contact, agent);
+    if (!won) return sendError(res, 409, 'held by another agent');
+    res.status(200).json({ ok: true, assignee: agent });
   }),
 );

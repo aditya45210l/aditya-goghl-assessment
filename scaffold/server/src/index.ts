@@ -4,6 +4,7 @@ import { getDb } from './db.js';
 import { getRedis } from './redis.js';
 import { ensureIndexes } from './lib/store.js';
 import { createApp, state } from './app.js';
+import { startOutboxWorker } from './lib/outbox.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -29,6 +30,7 @@ async function main() {
 
   await connectWithRetry();
   state.ready = true;
+  startOutboxWorker(); // also picks up replies left unsent by an instance that died
   console.log('ready');
 
   // graceful stop on SIGTERM / Ctrl+C. A kill -9 skips this, which is why all state is in MongoDB/Redis.
