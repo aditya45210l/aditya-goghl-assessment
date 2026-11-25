@@ -52,7 +52,7 @@
 - Kill the server mid-request, restart, verify no lost or duplicated work.
 - Stop mongo/redis/mock container briefly (`docker stop` / `docker start`), verify recovery.
 
-## 5. Code style (keep it simple; a junior engineer must understand every file)
+## 4. Code style (keep it simple; a junior engineer must understand every file)
 - **Simple over clever.** Plain functions, async/await, early returns. No classes unless needed, no decorators, no DI frameworks, no generic abstractions "for later".
 - **One file, one job.** Routes only parse input, call a function, and send the response. Logic lives in `lib/`. Small files (aim < 150 lines), small functions (aim < 40 lines).
 - **Reuse, don't repeat.** Shared helpers for: workspace guard, grader token check, duplicate-key check (`isDup`), emitting events, sending JSON errors. The UI and the grader endpoints call the same functions.
@@ -65,7 +65,7 @@
 - **Readable React.** Function components, a few hooks (`useSession`, `useSocket`, `useConversations`), plain CSS. No state library.
 - **Log useful things only**: startup, retries, failures, with workspace and ids. No secrets in logs.
 
-## 6. Honesty and ownership
+## 5. Honesty and ownership
 - README: how to run from a clean clone, current status, what is NOT done and what would happen as a result.
 - DECISIONS.md: build-first rationale, cuts, silent-brief decisions, known gaps. Update it as you go, not at the end.
 - Never claim behavior that was not verified by running it. Save the latest checker report into the repo (e.g. `checker-report.txt`).
