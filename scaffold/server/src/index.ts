@@ -5,6 +5,7 @@ import { getRedis } from './redis.js';
 import { ensureIndexes } from './lib/store.js';
 import { createApp, state } from './app.js';
 import { startOutboxWorker } from './lib/outbox.js';
+import { attachWebSocket } from './lib/ws.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -25,6 +26,7 @@ async function connectWithRetry() {
 
 async function main() {
   const server = createServer(createApp());
+  attachWebSocket(server);
   // listen first so /healthz can say "not ready yet" (503) instead of refusing connections
   server.listen(config.port, () => console.log(`server on http://localhost:${config.port}`));
 
