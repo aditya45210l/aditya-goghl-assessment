@@ -6,8 +6,8 @@
 - Use: `scripts/checkpoint.sh "feat: short message"`  (adds, commits, pushes; push failure is non-fatal, retry next time).
 - Before starting any large change, checkpoint first. After finishing any step, checkpoint.
 - Never rewrite history, force-push, or leave work uncommitted at the end of a turn.
-- Human runs `scripts/autocommit.sh` in a spare terminal as a safety net.
-- Every ~30 min and at the end: `scripts/export-ai-logs.sh` and commit ai-logs/.
+- At the end: export every AI session (Claude Code `/export` or the raw transcript) into ai-logs/, unedited, and commit.
+- To stop dev servers use `scripts/stop-dev.sh` (only LISTENING processes; a plain `lsof -ti:4000 | xargs kill` also kills Docker Desktop).
 
 ## 2. Working loop
 1. Read the brief; build the CORE flow first, thinly but correctly; list what is cut in DECISIONS.md.

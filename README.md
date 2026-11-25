@@ -296,7 +296,7 @@ scaffold/web/src
   useLiveEvents.ts        WebSocket with reconnect + ?after replay
   components/ui/          shadcn/ui components; components/illustrations.tsx (SVGs)
   lib/                    theme (light/dark), test users, cn()
-scripts/                  e2e-selftest.mjs, billing-selftest.mjs, stop-dev.sh, checkpoint/export helpers
+scripts/                  e2e-selftest.mjs, billing-selftest.mjs, stop-dev.sh (safe stop), checkpoint.sh (commit + push)
 PRD.md, BONUS_PRD.md      plans and designs
 DECISIONS.md              decisions, cuts, known gaps
 AGENTS.md, CLAUDE.md      rules the AI assistant followed while building
@@ -306,7 +306,52 @@ CHECK_REPORT.json         last full check (75/75)
 
 ---
 
-## 9. Not built, and known limits
+## 9. Code map (every module and its functions)
+
+For people and AI agents finding their way around. Server code is in `scaffold/server/src`, web code in `scaffold/web/src`.
+
+### Server
+| File | Functions (what they do) |
+|---|---|
+| `index.ts` | `connectWithRetry` (wait for MongoDB + Redis, create indexes), `main` (listen on `PORT`, start live fan-out and outbox worker, mark ready, graceful SIGTERM) |
+| `app.ts` | `createApp` (middleware order: security headers, `/healthz`, raw-body webhooks, grader token, JSON, routers, error handler), `state.ready` |
+| `config.ts` / `db.ts` / `redis.ts` | settings from the environment / `getDb` / `getRedis` (provided) |
+| `lib/constants.ts` | timeouts, lease, pacing gap, backoff, status ranks, session TTLs |
+| `lib/store.ts` | `collections`, `ensureIndexes` (unique indexes), `isDup` (E11000), `isKnownWorkspace`, `touchConversation` (idempotent upsert), `deleteAllData` (grader reset) |
+| `lib/http.ts` | `handle` (async route wrapper), `sendError`, `safeEqual` (constant-time), `errorHandler` (4xx kept, 503 when storage is down) |
+| `lib/signature.ts` | `verifyPigeonSignature` (HMAC over raw body + 5-minute window; also used for Paybox) |
+| `lib/inbound.ts` | `storeInboundMessage` (store once, repair conversation, emit), `applyStatus` (forward-only status update) |
+| `lib/outbox.ts` | `enqueueReply` (one insert = message + job), worker internals `leaseNextJob` / `processJob` / `retryLater` / `finish` (owner-checked), `startOutboxWorker`, `stopOutboxWorker` |
+| `lib/pigeon.ts` | `sendToPigeon` (timeout, Idempotency-Key, result: accepted / rate_limited / retry / rejected) |
+| `lib/pacer.ts` | `reserveSendSlot` (Redis Lua: shared per-workspace pacing + cool-off), `startCoolOff` (Retry-After for every instance) |
+| `lib/conversations.ts` | `claimConversation` (atomic, retry once on duplicate), `takeOverConversation`, `releaseConversation`, `setConversationState`, `listConversations` (cursor), `getConversation`, `listMessages` (pages of 50) |
+| `lib/events.ts` | `emit` (seq via `$inc`, store frame, publish), `emitSafely`, `channelFor` |
+| `lib/ws.ts` | `attachWebSocket` (upgrade auth + Origin, replay), `startLiveFanout` (Redis subscriber, logout channel); internals `startClient`, `deliverLive` (gap fill), `sendStored`, `queue`, `refuse` |
+| `lib/auth.ts` | `startLogin` / `finishLogin` (OIDC + PKCE, JWKS-verified ID token), `getSession`, `deleteSession`, `roleIn`, `sessionCookie`, `loginStateCookie`, `readCookie`, `readSessionId` |
+| `lib/billing.ts` | `subscribeWorkspace`, `changeSeats`, `cancelAtPeriodEnd`, `handlePayboxEvent` (re-read on webhook), `refreshSubscription`, `billingState`, `canSend`, `canSendWith` |
+| `lib/paybox.ts` / `lib/lock.ts` | `paybox` (client; refuses a POST without Idempotency-Key), `payboxReason` / `withLock` (Redis lock with owner token + TTL) |
+| `routes/webhook.ts` | `POST /webhooks/pigeon` (the PIGEON.md answer table) |
+| `routes/paybox-webhook.ts` | `POST /webhooks/paybox` |
+| `routes/grader.ts` | `requireGraderToken`, `/__grader/reset`, `snapshot`, `reply`, `claim`, `billing/subscribe`, `billing/seats` |
+| `routes/auth.ts` | `/auth/login`, `/auth/callback`, `/auth/logout`, `/api/me` |
+| `routes/api.ts` | CSRF guard, per-user rate limit, `requireMember` (401/403), contact validation, inbox/conversation/messages, reply/claim/release/close/reopen |
+| `routes/billing.ts` | `/api/billing` (admins see details, agents only `can_send`), `subscribe`, `seats`, `cancel` |
+
+### Web
+| File | What it does |
+|---|---|
+| `App.tsx` | `App` (session, workspace switch, rail, header, paused banner, page switch), `RailButton`, `SignIn` (test-user picker) |
+| `Inbox.tsx` | `Inbox` (filters + counts, search, merge-on-refresh, load more), memoized `ConversationRow`, `timeAgo` |
+| `Thread.tsx` | `Thread` (claim/take over/release/close/reopen, reply, scroll pagination), memoized `Bubble`, `mergeMessages`, `StatusIcon` |
+| `Billing.tsx` | `Billing` (admin page; card -> Paybox token in the browser), `explain` (state in plain words) |
+| `useLiveEvents.ts` | `useLiveEvents` (WebSocket, reconnect with backoff, `?after=` replay, reset frame) |
+| `api.ts` | `api.*` (typed fetch helpers; every POST sends JSON) |
+| `lib/theme.ts`, `lib/people.ts`, `lib/utils.ts` | `useTheme` (light/dark/system), `TEST_USERS` + `nameOf`, `cn` |
+| `components/ui/*`, `components/illustrations.tsx` | shadcn/ui button, card, badge, input, avatar (SVG), separator; SVG illustrations |
+
+---
+
+## 10. Not built, and known limits
 
 - **Not built:** end-to-end encrypted private notes (`PROTOCOL.md`) and Elasticsearch search. Plans for both are in
   `BONUS_PRD.md`. Billing does not support updating the card on an existing subscription.
