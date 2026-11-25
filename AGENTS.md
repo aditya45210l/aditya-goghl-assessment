@@ -52,7 +52,20 @@
 - Kill the server mid-request, restart, verify no lost or duplicated work.
 - Stop mongo/redis/mock container briefly (`docker stop` / `docker start`), verify recovery.
 
-## 4. Honesty and ownership
+## 5. Code style (keep it simple; a junior engineer must understand every file)
+- **Simple over clever.** Plain functions, async/await, early returns. No classes unless needed, no decorators, no DI frameworks, no generic abstractions "for later".
+- **One file, one job.** Routes only parse input, call a function, and send the response. Logic lives in `lib/`. Small files (aim < 150 lines), small functions (aim < 40 lines).
+- **Reuse, don't repeat.** Shared helpers for: workspace guard, grader token check, duplicate-key check (`isDup`), emitting events, sending JSON errors. The UI and the grader endpoints call the same functions.
+- **Clear names.** `enqueueReply`, `claimConversation`, `verifyPigeonSignature`; no abbreviations like `cnv`, `tmp2`.
+- **Explain the why, not the what.** A short comment above each non-obvious line (unique index = idempotency, lease = failover, rank = no status regress). No comment noise.
+- **Constants in one place** (`lib/constants.ts`): lease time, timeouts, pacing gap, retry backoff, status ranks. No magic numbers in the code.
+- **Consistent errors.** JSON `{ error: "message" }` with the right status code. One error-handling middleware. Never leak stack traces.
+- **TypeScript lightly.** Simple types/interfaces for documents and frames; avoid complex generics. Code must run with `tsx` even if strict typecheck has warnings.
+- **Few dependencies.** Express, mongodb, ioredis, ws. Node built-ins for fetch and crypto. Ask before adding anything else.
+- **Readable React.** Function components, a few hooks (`useSession`, `useSocket`, `useConversations`), plain CSS. No state library.
+- **Log useful things only**: startup, retries, failures, with workspace and ids. No secrets in logs.
+
+## 6. Honesty and ownership
 - README: how to run from a clean clone, current status, what is NOT done and what would happen as a result.
 - DECISIONS.md: build-first rationale, cuts, silent-brief decisions, known gaps. Update it as you go, not at the end.
 - Never claim behavior that was not verified by running it. Save the latest checker report into the repo (e.g. `checker-report.txt`).
