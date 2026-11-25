@@ -11,7 +11,7 @@ type Props = { workspace: string; contact: string; me: string; role: string; ref
 
 // Delivery status of a reply, shown under the bubble.
 function StatusIcon({ status }: { status?: string }) {
-  if (status === 'delivered') return <span className="inline-flex items-center gap-1"><CheckCheck className="size-3.5" /> delivered</span>;
+  if (status === 'delivered') return <span className="inline-flex items-center gap-1 text-wa-tick"><CheckCheck className="size-3.5" /> delivered</span>;
   if (status === 'sent') return <span className="inline-flex items-center gap-1"><Check className="size-3.5" /> sent</span>;
   if (status === 'failed') return <span className="inline-flex items-center gap-1 text-destructive"><X className="size-3.5" /> failed</span>;
   return <span className="inline-flex items-center gap-1"><Clock className="size-3.5" /> queued</span>;
@@ -50,17 +50,17 @@ export function Thread({ workspace, contact, me, role, refreshKey }: Props) {
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <header className="flex flex-wrap items-center gap-3 border-b px-4 py-3">
+      <header className="flex flex-wrap items-center gap-3 border-b bg-card px-4 py-2.5">
         <Avatar label={contact} />
         <div className="min-w-0">
-          <h2 className="truncate font-semibold">{contact}</h2>
+          <h2 className="tnum truncate text-sm font-semibold">{contact}</h2>
           <p className="text-xs text-muted-foreground">
             {info?.assignee ? (heldByMe ? 'Assigned to you' : 'Assigned to ' + info.assignee) : 'Unassigned'}
             {closed && ' · Closed'}
           </p>
         </div>
         <div className="ml-auto flex flex-wrap gap-2">
-          {!info?.assignee && <Button size="sm" onClick={() => act(() => api.claim(workspace, contact))}>Claim</Button>}
+          {!info?.assignee && <Button size="sm" variant="brand" onClick={() => act(() => api.claim(workspace, contact))}>Claim</Button>}
           {heldByOther && role === 'admin' && (
             <Button size="sm" variant="outline" onClick={() => act(() => api.claim(workspace, contact, true))}>Take over</Button>
           )}
@@ -75,20 +75,20 @@ export function Thread({ workspace, contact, me, role, refreshKey }: Props) {
 
       {error && <p className="border-b bg-destructive/10 px-4 py-2 text-sm text-destructive">{error}</p>}
 
-      <div className="min-h-0 flex-1 overflow-y-auto bg-muted/30 px-4 py-4">
+      <div className="wa-wallpaper scroll-thin min-h-0 flex-1 overflow-y-auto px-4 py-4">
         <ol className="mx-auto flex max-w-3xl flex-col gap-3">
           {messages.length === 0 && <li className="text-center text-sm text-muted-foreground">No messages yet.</li>}
           {messages.map((m) => (
             <li key={m.direction + m.id} className={cn('flex flex-col gap-1', m.direction === 'out' ? 'items-end' : 'items-start')}>
               <div
                 className={cn(
-                  'max-w-[75%] rounded-2xl px-4 py-2 text-sm shadow-xs',
-                  m.direction === 'out' ? 'rounded-br-sm bg-primary text-primary-foreground' : 'rounded-bl-sm border bg-card',
+                  'max-w-[75%] rounded-lg px-3 py-1.5 text-[14px] leading-snug text-zinc-900 shadow-sm dark:text-zinc-100',
+                  m.direction === 'out' ? 'rounded-tr-none bg-wa-out dark:bg-wa-out-dark' : 'rounded-tl-none bg-white dark:bg-zinc-800',
                 )}
               >
                 {m.text}
               </div>
-              <span className="flex items-center gap-2 px-1 text-xs text-muted-foreground">
+              <span className="tnum flex items-center gap-2 px-1 text-[11px] text-muted-foreground">
                 {new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                 {m.direction === 'out' && <StatusIcon status={m.status} />}
               </span>
@@ -98,7 +98,7 @@ export function Thread({ workspace, contact, me, role, refreshKey }: Props) {
         </ol>
       </div>
 
-      <footer className="border-t p-3">
+      <footer className="border-t bg-card p-3">
         {heldByMe && closed ? (
           <div className="mx-auto flex max-w-3xl items-center gap-2 rounded-md border border-dashed px-4 py-2 text-sm text-muted-foreground">
             <Lock className="size-4" /> This conversation is closed. Reopen it to reply.
@@ -106,7 +106,7 @@ export function Thread({ workspace, contact, me, role, refreshKey }: Props) {
         ) : heldByMe ? (
           <form onSubmit={send} className="mx-auto flex max-w-3xl gap-2">
             <Input value={text} onChange={(e) => setText(e.target.value)} placeholder="Write a reply…" maxLength={4096} autoFocus />
-            <Button type="submit" disabled={!text.trim()}><Send /> Send</Button>
+            <Button type="submit" variant="brand" disabled={!text.trim()}><Send /> Send</Button>
           </form>
         ) : (
           <div className="mx-auto flex max-w-3xl items-center justify-between gap-3 rounded-md border border-dashed px-4 py-2 text-sm text-muted-foreground">

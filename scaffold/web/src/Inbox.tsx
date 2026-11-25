@@ -55,15 +55,15 @@ export function Inbox({ workspace, me, selected, onSelect, refreshKey }: Props) 
   const shown = items.filter((c) => test(c, me));
 
   return (
-    <aside className="flex max-h-[40vh] w-full shrink-0 flex-col border-b md:max-h-none md:w-80 md:border-r md:border-b-0">
-      <div className="flex gap-1 border-b p-2">
+    <aside className="flex max-h-[40vh] w-full shrink-0 flex-col border-b bg-card md:max-h-none md:w-[300px] md:border-r md:border-b-0">
+      <div className="flex items-center gap-1 border-b px-2 py-1.5 text-[13px]">
         {FILTERS.map((f) => (
           <Button key={f.id} size="sm" variant={filter === f.id ? 'secondary' : 'ghost'} onClick={() => setFilter(f.id)}>
             {f.label}
           </Button>
         ))}
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
         {error && <p className="p-4 text-sm text-destructive">{error}</p>}
         {!error && shown.length === 0 && <p className="p-4 text-sm text-muted-foreground">Nothing here.</p>}
         {shown.map((c) => (
@@ -71,19 +71,19 @@ export function Inbox({ workspace, me, selected, onSelect, refreshKey }: Props) 
             key={c.contact}
             onClick={() => onSelect(c.contact)}
             className={cn(
-              'flex w-full items-center gap-3 border-b px-3 py-3 text-left transition-colors hover:bg-accent',
-              c.contact === selected && 'bg-accent',
+              'flex w-full items-center gap-3 border-b px-3 py-2.5 text-left transition-colors hover:bg-muted/60',
+              c.contact === selected && 'bg-muted',
             )}
           >
             <Avatar label={c.contact} />
             <div className="min-w-0 flex-1">
               <div className="flex items-center justify-between gap-2">
-                <span className="truncate text-sm font-medium">{c.contact}</span>
-                <span className="shrink-0 text-xs text-muted-foreground">{timeAgo(c.lastActivityAt)}</span>
+                <span className="tnum truncate text-[13px] font-semibold">{c.contact}</span>
+                <span className="tnum shrink-0 text-[11px] text-muted-foreground">{timeAgo(c.lastActivityAt)}</span>
               </div>
               <div className="mt-1 flex gap-1">
                 {c.assignee
-                  ? <Badge variant={c.assignee === me ? 'default' : 'secondary'}>{c.assignee === me ? 'You' : c.assignee}</Badge>
+                  ? <Badge variant={c.assignee === me ? 'brand' : 'secondary'}>{c.assignee === me ? 'You' : c.assignee}</Badge>
                   : <Badge variant="outline">Unassigned</Badge>}
                 {c.state === 'closed' && <Badge variant="secondary">Closed</Badge>}
               </div>
