@@ -22,7 +22,8 @@ Configuration comes from the environment; defaults match `.env.example`, so no `
 ```bash
 npm run check              # level 1 (stop the dev server first: the check starts its own)
 npm run check:full         # levels 1, 2, 3, 5; writes CHECK_REPORT.json
-npm --prefix scaffold/server test   # unit tests (signature, cookie parsing, claim race)
+npm --prefix scaffold/server test   # unit tests (signature, cookie, claim races, close/reopen permissions)
+node scripts/billing-selftest.mjs   # bonus billing scenario against the Paybox simulator (needs the server on :4000; wipes dev data)
 ```
 
 Last full check: see `CHECK_REPORT.json` (75 / 75 on levels 1, 2, 3 and 5 during development).
@@ -44,9 +45,12 @@ scaffold/server/src
     events.ts         seq-numbered change log + Redis pub/sub
     ws.ts             /ws: auth, ?after replay, live frames in strict seq order
     auth.ts           OIDC code + PKCE, ID token verification (JWKS), sessions in Redis
+    billing.ts        bonus: Paybox subscribe/seats/cancel, webhook re-read, canSend gate
+    paybox.ts, lock.ts  Paybox client (Idempotency-Key on every POST), per-workspace Redis lock
     store.ts          collections, unique indexes, helpers
     constants.ts      every tuning number with its reason
-scaffold/web/src      App, Inbox, Thread, useLiveEvents (reconnects with ?after), api.ts
+scaffold/web/src      App, Inbox, Thread, Billing (admin), useLiveEvents (reconnects with ?after), api.ts
+                      shadcn/ui components in components/ui, theme tokens in index.css
 docs/provided/        the brief and reference material we were given
 ```
 

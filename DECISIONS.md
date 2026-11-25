@@ -23,11 +23,32 @@ Core design (all state in MongoDB/Redis, any instance can die at any line):
 ## Cut, and what that means
 - **End-to-end encrypted notes**: not built (no PROTOCOL.md). Agents cannot leave private notes yet.
 - **Elasticsearch search**: not built. There is no message search.
-- **Billing bonus (Paybox)**: not built.
 - **UI**: shadcn/ui components (Tailwind v4) with inbox filters, live status badges and claim-to-reply. On any live change it refetches the visible lists instead of patching
   state; simple and correct, but more requests than necessary. A thread shows the latest 500 messages.
 - **Process safety net**: unexpected errors are logged instead of killing the process (work is lease-based, so a
   crash would lose nothing, but staying up is better); a server that cannot bind its port exits.
+
+## Bonus: billing (Paybox)
+Built: admin subscribes (seats + card), changes seats, cancels at period end; state follows Paybox through
+webhooks; canceled workspaces cannot send (`/__grader/reply` and UI reply answer 402); agents cannot see or
+change billing (403). `node scripts/billing-selftest.mjs` runs the grader's scenario against the simulator: 18/18.
+- **Card never reaches our server**: the browser turns it into a token with the publishable key; the API refuses
+  any `card` field. Paybox's report shows 0 card numbers via the secret key and 0 POSTs without Idempotency-Key.
+- **Concurrency**: a per-workspace Redis lock makes subscribes/seat changes take turns across instances, and every
+  Paybox POST has a key derived from the operation (`cus-<ws>`, `sub-<ws>-<token>`, `seats-<sub>-<attempt>`), so
+  three simultaneous subscribes give one customer and one subscription.
+- **Webhooks are hints**: after the signature check we re-read the subscription from Paybox and store that. Two
+  guards in the update filter: an older read never overwrites a newer one, and only the workspace's current
+  subscription is stored (the self-test caught a webhook about a canceled earlier attempt overwriting the new one).
+- **past_due**: can still send during Paybox's retry window (about 5 days); the admin sees what happens next.
+- **incomplete** (declined or waiting for the bank): still the free trial, can send. An unpaid attempt that expires
+  counts as never subscribed. The UI shows "Waiting for your bank" with the approval link and updates by webhook.
+- **Seats below the number of people**: nobody is locked out; seats are a billing count and membership comes
+  from the IdP. (A later version would warn the admin.)
+- **Removing seats mid-month**: the admin is told it applies now and becomes credit on the next invoice, no refund.
+- Replies accepted (202) before a cancellation still go out: the gate is at accept time, and "an accepted reply is
+  never lost" wins.
+- Not built: updating the card on an existing subscription (a past_due admin can only wait or subscribe again).
 
 ## Decisions where the brief was silent
 - Inbound order is by `occurred_at`, then message id (what Pigeon's report calls the true order).

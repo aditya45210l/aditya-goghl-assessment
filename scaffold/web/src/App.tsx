@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Inbox as InboxIcon, LogOut, MessagesSquare, Moon, Sun } from 'lucide-react';
+import { CreditCard, Inbox as InboxIcon, LogOut, MessagesSquare, Moon, Sun } from 'lucide-react';
 import { api, type Me } from './api';
 import { Inbox } from './Inbox';
 import { Thread } from './Thread';
+import { Billing } from './Billing';
 import { useLiveEvents } from './useLiveEvents';
 import { useTheme } from '@/lib/theme';
 import { Button } from '@/components/ui/button';
@@ -16,6 +17,8 @@ export function App() {
   const [workspace, setWorkspace] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [page, setPage] = useState<'inbox' | 'billing'>('inbox');
+  const [sendingPaused, setSendingPaused] = useState(false);
   const theme = useTheme();
 
   useEffect(() => {
@@ -25,6 +28,11 @@ export function App() {
       .finally(() => setLoading(false));
   }, []);
 
+  useEffect(() => {
+    if (!workspace) return;
+    api.billing(workspace).then((x) => setSendingPaused(!x.can_send)).catch(() => setSendingPaused(false));
+  }, [workspace, refreshKey]);
+
   // any live change (new message, status, assignment) refreshes the visible data
   const connected = useLiveEvents(workspace, () => setRefreshKey((k) => k + 1));
 
@@ -32,6 +40,7 @@ export function App() {
   if (!me) return <SignIn />;
 
   const role = me.workspaces.find((w) => w.id === workspace)?.role ?? 'agent';
+  const showBilling = page === 'billing' && role === 'admin';
   const switchWorkspace = (id: string) => { setWorkspace(id); setSelected(null); };
 
   return (
@@ -41,9 +50,10 @@ export function App() {
         <div className="mb-3 flex size-8 items-center justify-center rounded-md bg-brand text-white">
           <MessagesSquare className="size-4" />
         </div>
-        <div className="flex size-9 items-center justify-center rounded-md bg-white/10 text-white" title="Inbox">
-          <InboxIcon className="size-4" />
-        </div>
+        <RailButton active={!showBilling} title="Inbox" onClick={() => setPage('inbox')}><InboxIcon className="size-4" /></RailButton>
+        {role === 'admin' && (
+          <RailButton active={showBilling} title="Billing" onClick={() => setPage('billing')}><CreditCard className="size-4" /></RailButton>
+        )}
         <button
           onClick={theme.toggle}
           title={theme.mode === 'dark' ? 'Light mode' : 'Dark mode'}
@@ -82,7 +92,13 @@ export function App() {
           </div>
         </header>
 
-        {workspace && (
+        {sendingPaused && (
+          <div className="border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-[13px] text-destructive">
+            This workspace's subscription is canceled: sending replies is paused. {role === 'admin' ? 'Open Billing to subscribe again.' : 'Ask an admin to subscribe again.'}
+          </div>
+        )}
+        {workspace && showBilling && <Billing workspace={workspace} refreshKey={refreshKey} />}
+        {workspace && !showBilling && (
           <div className="flex min-h-0 flex-1 flex-col md:flex-row">
             <Inbox workspace={workspace} me={me.sub} selected={selected} onSelect={setSelected} refreshKey={refreshKey} />
             {selected ? (
@@ -97,6 +113,18 @@ export function App() {
         )}
       </div>
     </div>
+  );
+}
+
+function RailButton({ active, title, onClick, children }: { active: boolean; title: string; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      title={title}
+      onClick={onClick}
+      className={'flex size-9 items-center justify-center rounded-md ' + (active ? 'bg-white/10 text-white' : 'text-zinc-400 hover:bg-white/10 hover:text-white')}
+    >
+      {children}
+    </button>
   );
 }
 
