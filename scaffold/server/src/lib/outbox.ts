@@ -53,12 +53,16 @@ async function leaseNextJob(): Promise<Document | null> {
 }
 
 // Put the job back to be tried again after `delayMs`.
-async function retryLater(job: Document, delayMs: number, countAttempt: boolean) {
+async function retryLater(job: Document, delayMs: number, countAttempt: boolean, reason?: string) {
   const { messages } = await collections();
+  if (reason) console.warn(`send retry ws=${job.workspace} client_ref=${job.key} attempt=${(job.send.attempts ?? 0) + 1} reason=${reason} in=${Math.round(delayMs)}ms`);
   await messages.updateOne(
     { _id: job._id, 'send.owner': workerId },
     {
-      $set: { 'send.state': 'pending', 'send.nextAt': new Date(Date.now() + delayMs), 'send.leaseUntil': null },
+      $set: {
+        'send.state': 'pending', 'send.nextAt': new Date(Date.now() + delayMs), 'send.leaseUntil': null,
+        ...(reason ? { 'send.lastError': reason } : {}),
+      },
       $inc: { 'send.attempts': countAttempt ? 1 : 0 },
     },
   );
@@ -80,16 +84,17 @@ async function processJob(job: Document) {
   if (result.kind === 'accepted') return finish(job, { 'send.state': 'done', 'send.pigeonId': result.pigeonId });
   if (result.kind === 'rate_limited') {
     await startCoolOff(job.workspace, result.retryAfterMs);
-    return retryLater(job, result.retryAfterMs + 150, false);
+    return retryLater(job, result.retryAfterMs + 150, false, '429 rate limited');
   }
   if (result.kind === 'retry') {
     const attempts = job.send.attempts ?? 0;
     const base = RETRY_BACKOFF_MS[Math.min(attempts, RETRY_BACKOFF_MS.length - 1)];
-    return retryLater(job, base + Math.random() * base, true); // backoff with jitter
+    return retryLater(job, base + Math.random() * base, true, 'provider unavailable or timeout'); // backoff with jitter
   }
   // rejected: Pigeon will never take it. Mark the reply failed so the agent sees it.
   const { messages } = await collections();
-  await finish(job, { 'send.state': 'failed' });
+  console.warn(`send rejected ws=${job.workspace} client_ref=${job.key} status=${result.status}`);
+  await finish(job, { 'send.state': 'failed', 'send.lastError': 'rejected with ' + result.status });
   const updated = await messages.updateOne(
     { _id: job._id, rank: { $lt: STATUS_RANK.failed } },
     { $set: { status: 'failed', rank: STATUS_RANK.failed } },
@@ -97,11 +102,21 @@ async function processJob(job: Document) {
   if (updated.modifiedCount) await emitSafely(job.workspace, { type: 'message.status', contact: job.contact, client_ref: job.key, status: 'failed' });
 }
 
+let running = false;
+
+// Called on SIGTERM: stop taking new jobs. A job already in flight keeps its lease;
+// if we exit before it finishes, another instance picks it up when the lease expires.
+export function stopOutboxWorker() {
+  running = false;
+  wakeWorker();
+}
+
 // A few loops per instance, so one slow send (up to the timeout) does not hold up the others.
 export function startOutboxWorker(loops = 4) {
+  running = true;
   for (let i = 0; i < loops; i++) {
     (async () => {
-      for (;;) {
+      while (running) {
         try {
           const job = await leaseNextJob();
           if (!job) await sleep(WORKER_IDLE_MS);

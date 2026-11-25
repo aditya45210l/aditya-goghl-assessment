@@ -12,6 +12,14 @@ export function createApp() {
   const app = express();
   app.disable('x-powered-by');
 
+  // basic browser hardening for every response
+  app.use((_req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    next();
+  });
+
   // the check waits for 200 here before sending traffic
   app.get('/healthz', (_req, res) => {
     res.status(state.ready ? 200 : 503).json({ ok: state.ready });

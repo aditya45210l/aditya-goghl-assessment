@@ -4,7 +4,7 @@ import { getDb } from './db.js';
 import { getRedis } from './redis.js';
 import { ensureIndexes } from './lib/store.js';
 import { createApp, state } from './app.js';
-import { startOutboxWorker } from './lib/outbox.js';
+import { startOutboxWorker, stopOutboxWorker } from './lib/outbox.js';
 import { attachWebSocket } from './lib/ws.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -37,7 +37,8 @@ async function main() {
 
   // graceful stop on SIGTERM / Ctrl+C. A kill -9 skips this, which is why all state is in MongoDB/Redis.
   const stop = () => {
-    state.ready = false;
+    state.ready = false; // load balancer stops sending us traffic
+    stopOutboxWorker(); // stop claiming new send jobs
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 3000).unref();
   };

@@ -4,7 +4,7 @@ import { handle, sendError } from '../lib/http.js';
 import { getSession, roleIn, type Session } from '../lib/auth.js';
 import { enqueueReply } from '../lib/outbox.js';
 import {
-  claimConversation, listConversations, listMessages, releaseConversation, setConversationState, takeOverConversation,
+  claimConversation, getConversation, listConversations, listMessages, releaseConversation, setConversationState, takeOverConversation,
 } from '../lib/conversations.js';
 
 export const apiRouter = Router();
@@ -28,8 +28,16 @@ apiRouter.get('/api/conversations', handle(async (req, res) => {
   const a = await requireMember(req, res);
   if (!a) return;
   const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
-  const before = typeof req.query.before === 'string' ? new Date(req.query.before) : null;
-  res.json(await listConversations(a.workspace, before && !isNaN(before.getTime()) ? before : null, limit));
+  const cursor = typeof req.query.before === 'string' ? req.query.before : null;
+  res.json(await listConversations(a.workspace, cursor, limit));
+}));
+
+apiRouter.get('/api/conversations/:contact', handle(async (req, res) => {
+  const a = await requireMember(req, res);
+  if (!a) return;
+  const conversation = await getConversation(a.workspace, contactOf(req));
+  if (!conversation) return sendError(res, 404, 'no such conversation');
+  res.json(conversation);
 }));
 
 apiRouter.get('/api/conversations/:contact/messages', handle(async (req, res) => {

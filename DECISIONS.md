@@ -46,5 +46,7 @@ Core design (all state in MongoDB/Redis, any instance can die at any line):
 - Redis is treated as durable enough for sessions and pacing; a Redis restart signs everyone out.
 - No CSRF token: cookies are `SameSite=Lax` and state-changing routes are JSON POSTs, which blocks the usual
   cross-site form attack, but a stricter setup would add an explicit token.
+- Failed send attempts are logged (workspace, client_ref, reason; never message text or keys) and the last
+  error is stored on the message, but there are no metrics or dashboards.
 - Unit tests are few: signature checking, cookie parsing and the claim race. The rest is covered by the
   provided check, not by our own tests.

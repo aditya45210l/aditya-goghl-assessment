@@ -25,6 +25,7 @@ export const api = {
   logout: () => request('POST', '/auth/logout'),
   conversations: (ws: string, before?: string) =>
     request<{ items: Conversation[]; next: string | null }>('GET', '/api/conversations' + q(ws) + (before ? '&before=' + encodeURIComponent(before) : '')),
+  conversation: (ws: string, contact: string) => request<Conversation>('GET', conv(contact) + q(ws)),
   messages: (ws: string, contact: string) => request<{ items: Message[] }>('GET', conv(contact) + '/messages' + q(ws)),
   // client_ref is made here, so a retried click is still one reply on the server
   reply: (ws: string, contact: string, text: string) =>

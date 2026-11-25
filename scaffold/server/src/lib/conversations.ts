@@ -50,17 +50,32 @@ export async function setConversationState(workspace: string, contact: string, s
   return true;
 }
 
-// Inbox page: newest activity first. Cursor = lastActivityAt of the last item on the previous page.
-export async function listConversations(workspace: string, before: Date | null, limit: number) {
+const toSummary = (c: Record<string, any>) => ({
+  contact: c.contact, assignee: c.assignee ?? null, state: c.state, lastActivityAt: c.lastActivityAt,
+});
+
+// Inbox page: newest activity first.
+// The cursor is "<lastActivityAt ISO>|<contact>" of the last item shown. Using the contact as a
+// tie-breaker means two conversations with the same timestamp are never skipped between pages.
+export async function listConversations(workspace: string, cursor: string | null, limit: number) {
   const { conversations } = await collections();
   const filter: Record<string, unknown> = { workspace };
-  if (before) filter.lastActivityAt = { $lt: before };
+  const [iso, contact] = (cursor ?? '').split('|');
+  const at = new Date(iso);
+  if (cursor && !isNaN(at.getTime())) {
+    filter.$or = [{ lastActivityAt: { $lt: at } }, { lastActivityAt: at, contact: { $gt: contact ?? '' } }];
+  }
   const items = await conversations.find(filter).sort({ lastActivityAt: -1, contact: 1 }).limit(limit).toArray();
-  const next = items.length === limit ? items[items.length - 1].lastActivityAt.toISOString() : null;
-  return {
-    items: items.map((c) => ({ contact: c.contact, assignee: c.assignee ?? null, state: c.state, lastActivityAt: c.lastActivityAt })),
-    next,
-  };
+  const last = items[items.length - 1];
+  const next = items.length === limit ? last.lastActivityAt.toISOString() + '|' + last.contact : null;
+  return { items: items.map(toSummary), next };
+}
+
+// One conversation's summary (assignee, state), or null if it does not exist in this workspace.
+export async function getConversation(workspace: string, contact: string) {
+  const { conversations } = await collections();
+  const c = await conversations.findOne({ workspace, contact });
+  return c ? toSummary(c) : null;
 }
 
 // One conversation's messages, oldest first (the same order as the grader snapshot).

@@ -12,8 +12,7 @@ export function Thread({ workspace, contact, me, role, refreshKey }: Props) {
 
   useEffect(() => {
     api.messages(workspace, contact).then((r) => setMessages(r.items)).catch((e) => setError(e.message));
-    // the inbox list carries assignee/state; fetch it from there to keep one source
-    api.conversations(workspace).then((r) => setInfo(r.items.find((c) => c.contact === contact) ?? null)).catch(() => {});
+    api.conversation(workspace, contact).then(setInfo).catch(() => setInfo(null));
   }, [workspace, contact, refreshKey]);
 
   // run an action and show its error, if any; live updates refresh the view afterwards
