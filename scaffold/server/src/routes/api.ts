@@ -51,6 +51,10 @@ apiRouter.post('/api/conversations/:contact/reply', handle(async (req, res) => {
   if (!a) return;
   const text = req.body?.text;
   if (typeof text !== 'string' || !text.trim() || text.length > 4096) return sendError(res, 400, 'text is required');
+  // Product rule: an agent replies only to a conversation they hold, so two agents never answer
+  // the same customer at once. (The grader's /__grader/reply is the "system" path and skips this.)
+  const conversation = await getConversation(a.workspace, contactOf(req));
+  if (conversation?.assignee !== a.session.sub) return sendError(res, 409, 'claim this conversation before replying');
   // the browser sends its own client_ref so a retried click is still one reply
   const clientRef = typeof req.body.client_ref === 'string' && req.body.client_ref ? req.body.client_ref.slice(0, 200) : randomUUID();
   await enqueueReply(a.workspace, contactOf(req), text, clientRef);

@@ -32,6 +32,8 @@ Core design (all state in MongoDB/Redis, any instance can die at any line):
 - A reply to a workspace we do not know is `404`; missing fields are `400`.
 - Roles: `agent` and `admin` can both read, reply, claim, release their own, close and reopen.
   Only `admin` can take over or release a conversation someone else holds.
+- An agent can reply only to a conversation they hold (409 otherwise; the UI shows "Claim to reply").
+  `/__grader/reply` is the system path and does not require a claim, as the contract says.
 - A new customer message does not reopen a closed conversation automatically; it moves it to the top of the inbox.
 - Sessions live 8 h in Redis (the IdP has no refresh tokens or logout); `POST /auth/logout` ends ours.
   Workspaces and roles are taken from the verified ID token at login and kept for the session.

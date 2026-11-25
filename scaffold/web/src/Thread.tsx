@@ -53,10 +53,14 @@ export function Thread({ workspace, contact, me, role, refreshKey }: Props) {
           </li>
         ))}
       </ol>
-      <form onSubmit={send} className="reply">
-        <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Type a reply" maxLength={4096} />
-        <button type="submit" disabled={!text.trim()}>Send</button>
-      </form>
+      {heldByMe ? (
+        <form onSubmit={send} className="reply">
+          <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Type a reply" maxLength={4096} />
+          <button type="submit" disabled={!text.trim()}>Send</button>
+        </form>
+      ) : (
+        <p className="muted">{heldByOther ? 'Only ' + info?.assignee + ' can reply while they hold this conversation.' : 'Claim this conversation to reply.'}</p>
+      )}
     </section>
   );
 }
