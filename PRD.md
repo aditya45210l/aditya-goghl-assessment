@@ -1,200 +1,221 @@
-# Switchboard: PRD, HLD, LLD and build plan
+# Switchboard: PRD, HLD, LLD and build plan (v2, verified against simulator source)
 
-Source of truth: `docs/provided/BRIEF.md`, `docs/provided/PIGEON.md`, and `harness/check.js` (what is actually measured).
+Sources of truth: `docs/provided/BRIEF.md`, `docs/provided/PIGEON.md`, `harness/check.js` (scoring), `pigeon/server.js` and `idp/server.js` (actual behaviour).
 
 ---
 
 ## 1. Product in one line
-A multi-tenant shared support inbox. Customer messages arrive from Pigeon by webhook; human agents log in, see conversations live, claim, reply, close. **Never lose, never duplicate, never leak across workspaces, never let two agents hold one conversation**, while the network is bad, the process is killed, and several copies run.
+A multi-tenant shared support inbox. Customer messages arrive from Pigeon by webhook; human agents log in, see conversations live, claim, reply, close. **Never lose, never duplicate, never leak across workspaces, never let two agents hold one conversation**, under a bad network, `kill -9`, and several copies.
 
-## 2. What we were given vs what we build
-
+## 2. Given vs to build
 | Given (do not edit) | We build |
 |---|---|
-| Pigeon :4010 (unreliable provider), Mock IdP :4020, Paybox :4030 | Server in `scaffold/server` (Express + TS, run with `tsx`) |
-| MongoDB :27017, Redis :6379 (docker compose) | React app in `scaffold/web` (Vite) |
-| `harness/check.js` (grader), load balancer on :4000, instances on :4001.. | `README.md`, `DECISIONS.md`, `CHECK_REPORT.json`, `ai-logs/` |
-| `scaffold/server/src/{config,db,redis}.ts` (env config, lazy connects) | Optional: `PROTOCOL.md` (encrypted notes), tests |
-| `switchboard.json` (`install`, `start`, `health`) | |
+| Pigeon :4010, Mock IdP :4020, Paybox :4030, Mongo, Redis (docker compose) | Server in `scaffold/server` (Express + TS via `tsx`) |
+| `harness/check.js` + its load balancer on :4000 -> instances :4001.. | React app in `scaffold/web` (Vite, proxies `/api /auth /ws /healthz`) |
+| `scaffold/server/src/{config,db,redis}.ts` | README, DECISIONS, CHECK_REPORT.json, ai-logs/ |
+| `switchboard.json` | Optional: PROTOCOL.md, tests |
 
-## 3. Facts the checker enforces (read from check.js)
-- Starts our server with `PORT=4001..`, `NODE_ENV=production`, env defaults matching `.env.example`. Waits for `/healthz` = 200 (90 s max).
-- Load balancer round-robins **every request** across instances. So login state, PKCE verifier, sessions, rate limit, WS events must be shared (Redis/Mongo), never in memory.
-- Kill is `SIGKILL` on the process group. No shutdown hook runs. Only durable state survives.
-- **Level 1 (24):** inbound complete (4), no duplicates (3), order by `occurred_at` (3), isolation incl. ids starting `forged_`/`stale_` (2), rejects forged (2), rejects stale (1), **ack p95 < 1000 ms** (1), outbound exactly once **with Idempotency-Key** (2), **no request inside a Retry-After window** (1), final status matches carrier (1), claim race 6 agents x 5 contacts (2), outage recovery and **<= 6 requests/s during outage** (2).
-- **Level 2 (14):** kill mid-webhook-flood (complete 3, no dupes 2, order 2); kill right after 12 replies got 202 (delivered 4, once 2, status 1).
-- **Level 3 (22):** 2+ instances: inbound (6), claim race (3), 24 replies once (3), **Retry-After honoured across instances** (3), one instance dies forever: others deliver its accepted replies within 60 s (5) with right status (2).
-- **Level 5 (15):** full OIDC login through LB (3), `/api/me` 401 without session (1), `/api/conversations` 200/403/401 (3), WS refuses no-session and non-member (2), live inbound frames within 5 s with rising `seq`, no leaks (3), reconnect with `after=N` replays missed frames and nothing `<= N` (3).
-- `/__grader/reply` may be retried by the checker with the same `client_ref` after 1 s or a 30 s timeout: must stay one reply.
+## 3. Verified facts that shape the design
 
-## 4. HLD (high level design)
+### From check.js
+- Instances get `PORT=4001..`, `NODE_ENV=production`; `/healthz` must be 200 within 90 s.
+- LB round-robins **every HTTP request and every WS upgrade** across instances. Anything per-user (PKCE state, session) must be in Redis.
+- Kill = `SIGKILL` of the process group. Only Mongo/Redis state survives.
+- Inbound order is judged **by `occurred_at`**. Ids starting `forged_`/`stale_` in the snapshot count as leaks.
+- `ack_speed`: webhook p95 < **1000 ms** and at most 2 first attempts not acknowledged.
+- Replies: the check retries `/__grader/reply` with the **same `client_ref`** after a non-2xx or a 30 s timeout.
+- Outbound is judged by Pigeon's report: delivered once, **every request has `Idempotency-Key`**, `sentDuringCoolOff == 0`, final status in our snapshot equals Pigeon's.
+- Outage penalty if requests during outage > **6 x outage seconds** (48 for 8 s).
+- Failover: replies accepted (202) by a copy that dies forever must reach Pigeon within **60 s**.
+- Level 5 WS: frames must have **strictly increasing `seq`** as received, no frames from other workspaces, `after=N` must replay missed frames and **send nothing with seq <= N**.
+
+### From pigeon/server.js
+- Webhook retries: 6 attempts, waits 1.5, 3, 4.5, 6 s (about 22 s total), plus 10-15% extra duplicates.
+- Chaos: 8 msgs per contact (+50% follow-ups 150-600 ms later), delivery jitter 0-2.5 s, a burst of 30 msgs in 450 ms to one globex contact, 6 forged (wrong HMAC), 3 stale (t = now-3600).
+- Send API order of checks: **idempotency replay first** (key already accepted returns 200 even during outage/cool-off) -> outage 503 -> cool-off 429 (counted as violation) -> token bucket (8, +4/s) -> random 503 (7%) -> accept.
+- **Any 429 starts a 2 s cool-off for the whole workspace**; every request inside it is a violation.
+- 6% of accepted sends answer after **12 s** (already accepted; a retry with the same key gets the replay).
+- Status webhooks: `sent` (0.4-2.2 s) and final `delivered`/`failed` (1.2-3.5 s), may arrive in either order, 10% duplicated.
+
+### From idp/server.js
+- Authorize needs registered `redirect_uri`, `code_challenge_method=S256`; `?login=<sub>` skips the picker (the check uses it).
+- Token endpoint checks client secret, redirect_uri, PKCE verifier; returns RS256 `id_token` with `iss, aud, exp, nonce, sub, workspaces`. JWKS at `/jwks`.
+
+## 4. HLD
 
 ```
-                +------------------- Pigeon :4010 -------------------+
- webhooks (at-least-once, dup, out of order, forged, stale, bursts)  |  POST /v1/messages (429, 503, 12 s hangs, outages)
-                |                                                     ^
-                v                                                     |
-   LB :4000 (round robin) ---> [ instance A ] [ instance B ] ...      |
-                                   |  HTTP API + /ws                   |
-                                   |  outbox worker  -----------------+
+ Pigeon :4010 --webhooks--> LB :4000 --> [instance A] [instance B] ... --POST /v1/messages--> Pigeon
+                                   |            |  HTTP API, /ws, outbox worker
+                                   |            v
+                                   |    MongoDB (truth)   : messages(+outbox), conversations, events, counters
+                                   |    Redis   (shared)  : sessions, oidc state, send pacing + cool-off, pub/sub
                                    v
-                 MongoDB (truth): messages, conversations, outbox, events, counters, sessions?
-                 Redis (shared): sessions, OIDC state, rate-limit bucket + cooldown, pub/sub for WS fan-out
-                                   |
-                                   v
-                     React app (Vite :5173, proxies /api /auth /ws)
+                           React app (Vite :5173)
 ```
 
-Principles (senior-level, industry standard):
-1. **Store-then-ack.** Never answer 2xx/202 before Mongo acknowledged the write (`w: majority` default on single node is fine).
-2. **Idempotency by unique index, not by checking first.** Duplicate-key error (E11000) means "already done" and returns success.
-3. **Stateless instances.** All coordination via Mongo atomic ops and Redis. Any instance can die at any line.
-4. **Transactional outbox** for every outbound side effect; a worker with **leases** delivers it; a dead worker's lease expires and another takes over.
-5. **Monotonic state machines** for message status; late or duplicate events never move state backwards.
-6. **Tenant scoping on every query** (`workspace` in every filter, derived from the verified session, never from client trust).
-7. **Fail closed on security** (401 on bad signature, refuse WS upgrades), **fail open on unknowns from Pigeon** (2xx and ignore).
+Principles:
+1. **Store-then-ack.** 2xx/202 only after Mongo acknowledged.
+2. **Idempotency by unique index.** Duplicate key (E11000) = "already done" = success. Never read-then-write.
+3. **Stateless instances.** Any instance may die at any line.
+4. **Outbound message row is the outbox.** One insert creates both the visible message and the send job (no two-write gap).
+5. **Leases, not ownership.** Work is claimed with an expiring lease; a dead instance's work is reclaimed.
+6. **Pace, don't fight the limiter.** A shared Redis pacer keeps all instances under 4 sends/s per workspace, so we rarely see a 429; if we do, a shared cool-off stops every instance.
+7. **Monotonic status.** Ranked, conditional updates; late/duplicate events never go backwards.
+8. **Tenant scope everywhere.** Workspace comes from the verified session/event; every query filters by it.
+9. **Fail closed on security, fail open on unknown provider events.**
 
-## 5. LLD (low level design)
+## 5. LLD
 
-### 5.1 Server modules (`scaffold/server/src`)
+### 5.1 Modules (`scaffold/server/src`)
 ```
-index.ts          boot: await Mongo+Redis ready -> ensureIndexes -> http.listen(PORT) -> start outbox worker; /healthz 200 only after ready
-app.ts            express app; webhook route uses express.raw(), everything else express.json()
-lib/
-  mongo.ts        collections + ensureIndexes()
-  signature.ts    verifyPigeon(rawBody, header): parse t,v1; HMAC-SHA256("t.raw"); timingSafeEqual; |now - t| <= 300 s
-  events.ts       emit(workspace, frame): seq = $inc counters -> insert events{workspace,seq,frame} -> redis.publish
-  outbox.ts       enqueue(...) and worker loop (claim with lease, send, schedule retry)
-  pigeon.ts       send(workspace, {to,text,client_ref}) with AbortSignal.timeout(4000), Idempotency-Key = client_ref
-  ratelimit.ts    Redis Lua token bucket per workspace (8 burst, 4/s) + workspace cooldown key from Retry-After
-  auth.ts         OIDC discovery, PKCE, state in Redis, code exchange, id_token claims, session in Redis
-  ws.ts           upgrade handler: session + membership check, replay seq>after from Mongo, live via Redis subscribe
-routes/
-  webhook.ts  grader.ts  auth.ts  api.ts
+index.ts        boot: connect Mongo+Redis with retry -> ensureIndexes -> listen(PORT) -> start worker + subscriber
+                ready flag drives /healthz (503 until ready)
+app.ts          express; webhook route uses express.raw({type:'*/*', limit:'256kb'}) BEFORE express.json
+lib/store.ts    collection handles, ensureIndexes(), isDup(err)
+lib/signature.ts verifyPigeon(raw, header) -> 'ok' | 'bad' | 'stale'
+lib/events.ts   emit(ws, frame): seq via counters $inc -> events.insert -> redis.publish
+lib/pacer.ts    Redis Lua: per-workspace next-slot pacing (250-280 ms spacing) + cool-off key check
+lib/pigeon.ts   send(ws, msg): fetch with AbortSignal.timeout(4000), Authorization, Idempotency-Key=client_ref
+lib/outbox.ts   enqueueReply(), worker loop (claim lease -> pace -> send -> schedule)
+lib/auth.ts     discovery cache, PKCE, state in Redis, token exchange, RS256 verify via JWKS, sessions in Redis
+lib/ws.ts       upgrade auth, replay + live with gap filling, Redis subscriber fan-out
+routes/webhook.ts grader.ts auth.ts api.ts
 ```
+New dependency: `ws` (WebSocket server). Nothing else needed (Node 22 has fetch, crypto).
 
-### 5.2 Mongo collections and indexes (every doc has `workspace`)
-| Collection | Key fields | Unique index | Notes |
-|---|---|---|---|
-| `messages` | workspace, contact, direction(in/out), message_id or client_ref, text, occurred_at, status, statusRank | `{workspace:1, message_id:1}` partial(in); `{workspace:1, client_ref:1}` partial(out) | inbound order: sort `occurred_at, message_id` |
-| `conversations` | workspace, contact, assignee, state(open/closed), lastActivityAt | `{workspace:1, contact:1}` | inbox index `{workspace:1, lastActivityAt:-1}` |
-| `outbox` | workspace, client_ref, to, text, state(pending/inflight/done/failed), attempts, nextAttemptAt, leaseUntil, owner | `{workspace:1, client_ref:1}` | worker index `{state:1, nextAttemptAt:1}` |
-| `events` | workspace, seq, frame | `{workspace:1, seq:1}` | WS replay |
-| `counters` | _id = workspace, seq | _id | `$inc` for seq |
-| `status_early` | workspace, client_ref, status | | optional: status webhook that arrived before we stored the reply (we always store first, so rarely needed) |
+### 5.2 Mongo collections (every doc has `workspace`)
+| Collection | Fields | Indexes |
+|---|---|---|
+| `messages` | workspace, contact, dir `in`/`out`, message_id (in), client_ref (out), text, occurred_at, status, rank, **send: {state, attempts, nextAt, leaseUntil, owner, pigeonId}** (out only) | unique `{workspace, dir, key}` where key = message_id or client_ref; `{workspace, contact, occurred_at, key}` for reading; `{'send.state', 'send.nextAt'}` for the worker |
+| `conversations` | workspace, contact, assignee, state open/closed, lastActivityAt | unique `{workspace, contact}`; `{workspace, lastActivityAt:-1}` |
+| `events` | workspace, seq, frame | unique `{workspace, seq}` |
+| `counters` | _id = workspace, seq | _id |
 
-### 5.3 Key flows
+Status rank: queued 0, sent 1, delivered 2, failed 2 (terminal; first terminal wins).
 
-**Inbound webhook** (`POST /webhooks/pigeon`, raw body)
-1. Verify signature and timestamp -> `401` on any failure (never 5xx).
-2. `JSON.parse` -> `400` on failure.
-3. Unknown workspace / unknown type -> `200` ignore.
-4. `message.inbound`: `insertOne(messages)`; E11000 -> already stored. Upsert conversation `{$max:{lastActivityAt}}`, `$setOnInsert:{assignee:null,state:'open'}`. Only if newly inserted: `emit message.inbound`.
-5. `message.status`: conditional update `{workspace, client_ref, statusRank: {$lt: newRank}} -> {status, statusRank}`; if nothing matched (unknown ref or not newer) -> `200`. If updated -> `emit message.status`. Rank: queued 0 < sent 1 < delivered 2 = failed 2 (terminal; first terminal wins).
-6. Answer `200` within ms (target p95 < 1 s). If Mongo is unreachable -> `503` so Pigeon retries (store-then-ack). This is the one case a 5xx is right.
+### 5.3 Flows
 
-**Reply** (`/__grader/reply` and UI `POST /api/conversations/:contact/reply`, same function)
-1. Validate workspace is known (`4xx` otherwise), text, client_ref (UI generates a uuid).
-2. Upsert conversation. `insertOne(messages{status:'queued'})` + `insertOne(outbox{state:'pending', nextAttemptAt: now})`. E11000 on either -> same reply, return `202`.
-   - Order: insert outbox first (it is the durable intent), then message; both idempotent, so a crash between them is repaired by re-request or by the worker upserting the message.
-3. `emit message.status queued`; return `202`.
+**A. Inbound webhook** `POST /webhooks/pigeon`
+1. Signature: parse `t=..,v1=..`; HMAC-SHA256 of `t + "." + rawBody`; `timingSafeEqual`; bad/missing -> `401`; `|now - t| > 300 s` -> `401`. Never 5xx here.
+2. `JSON.parse` fails or required fields missing -> `400`.
+3. Unknown workspace (not in configured keys) or unknown `type` -> `200`, ignore.
+4. `message.inbound`: insert message (`occurred_at` from event). E11000 -> already stored, `200`. Upsert conversation `{$max: {lastActivityAt}}`, `$setOnInsert: {assignee: null, state: 'open'}`; if it was closed, reopen on new inbound (decision). Emit `message.inbound` only when newly inserted. `200`.
+5. `message.status`: `updateOne({workspace, dir:'out', key: client_ref, rank: {$lt: r}}, {$set: {status, rank}})`. Matched -> emit `message.status`. Not matched (unknown ref or not newer) -> `200`.
+6. Mongo down -> `503` so Pigeon retries (the only intended 5xx). Target latency: < 50 ms.
 
-**Outbox worker** (every instance, loop every ~200 ms)
-1. Claim: `findOneAndUpdate({state:{$in:['pending','inflight']}, nextAttemptAt:{$lte:now}, $or:[{leaseUntil:null},{leaseUntil:{$lt:now}}]}, {$set:{state:'inflight', leaseUntil: now+15s, owner}, $inc:{attempts:1}})`.
-2. Rate gate (Redis, per workspace): if cooldown key exists or bucket empty -> set `nextAttemptAt` = when allowed, release lease, continue.
-3. `POST /v1/messages` with `Idempotency-Key: client_ref`, timeout 4 s.
-   - `200` -> outbox `done`; message status at least `sent`? No: carrier status comes by webhook. Keep `queued` until webhook says `sent`. (Optionally store pigeon id.)
-   - `429` -> set Redis cooldown `SET ws:cool PX retryAfter*1000` (shared by all instances), reschedule after it.
-   - `503` / timeout / network error -> **unknown outcome**: reschedule with backoff+jitter (0.5 s, 1, 2, 4, cap 5 s), same key, so Pigeon dedupes. During an outage this keeps us under 6 req/s.
-   - Other `4xx` -> `failed`, emit status.
-4. Dead instance: its leases expire after 15 s, another instance reclaims (well under 60 s).
+**B. Reply** (`/__grader/reply` and UI reply share `enqueueReply`)
+1. Validate: workspace known (else `404`), contact and text strings, client_ref present (UI generates a UUID).
+2. Insert one outbound message doc with `status: 'queued', rank: 0, send: {state: 'pending', nextAt: now, attempts: 0}`. E11000 -> same reply -> `202`.
+3. Upsert conversation (lastActivityAt). Emit `message.status queued`. Kick the local worker. `202`.
 
-**Claim** (`/__grader/claim` and UI): upsert conversation, then `updateOne({workspace, contact, $or:[{assignee:null},{assignee:agent}]}, {$set:{assignee:agent}})`. matched -> `200` (+emit assigned if changed), else `409`. Upsert race: catch E11000 and retry once.
+**C. Outbox worker** (every instance; loop every 200 ms or when kicked)
+1. Claim: `findOneAndUpdate({'send.state': {$in: ['pending', 'inflight']}, 'send.nextAt': {$lte: now}, $or: [{'send.leaseUntil': null}, {'send.leaseUntil': {$lt: now}}]}, {$set: {'send.state': 'inflight', 'send.leaseUntil': now + 10s, 'send.owner': id}, $inc: {'send.attempts': 1}})`.
+2. Pacer (Redis Lua, per workspace): if cool-off key exists -> wait until it expires; else reserve `slot = max(now, next)`, `next = slot + 275 ms`. If slot is in the future, set `nextAt = slot`, release lease, continue.
+3. Send with `Idempotency-Key = client_ref`, 4 s timeout.
+   - `200` -> `send.state = 'done'`, store pigeonId. Status stays as webhooks say.
+   - `429` -> `SET cool:<ws> PX (Retry-After * 1000 + 100)` shared by all instances; reschedule after it.
+   - `503`, timeout, network error -> unknown outcome; reschedule with backoff + jitter (300 ms, 600, 1200, 2400, cap 3 s). Same key, so Pigeon dedupes. Pacing keeps outage traffic < 4/s < 6/s.
+   - `400`/`401` -> `send.state = 'failed'`, status `failed`, emit.
+4. Lease expiry (10 s) lets a surviving instance resend a dead instance's work well inside 60 s; Idempotency-Key makes a double send impossible.
+5. On boot nothing special is needed: leases simply expire.
 
-**Events and WS**
-- `emit`: `seq = (await counters.findOneAndUpdate({_id:ws},{$inc:{seq:1}},{upsert:true, returnDocument:'after'})).seq`; `events.insertOne`; `redis.publish('ws:'+workspace, frame)`.
-- Upgrade `/ws?workspace=&after=`: read session cookie -> Redis session; refuse (401, destroy) if none or not a member. Subscribe first, buffer live frames, replay `events.find({workspace, seq:{$gt:after}}).sort(seq)`, then flush buffer skipping `seq <= lastSent`. Each instance has one Redis subscriber for all channels.
+**D. Claim** (one atomic op, no race window)
+`updateOne({workspace, contact, assignee: {$in: [null, agent]}}, {$set: {assignee: agent}, $setOnInsert: {state: 'open', lastActivityAt: now}}, {upsert: true})`
+- matched or upserted -> `200`; emit `conversation.assigned` if it changed.
+- E11000 (someone else holds it, or lost the insert race) -> `409`.
+Release/close/reopen are similar conditional updates.
 
-**Auth (OIDC code + PKCE S256)**
-- `/auth/login`: discovery (cache ok, it is static), `state`, `nonce`, `verifier` random; store in Redis `oidc:<state>` TTL 10 min (shared across instances); 302 to authorize URL with `code_challenge`.
-- `/auth/callback`: load+delete state, exchange code (client secret + verifier), decode id_token (verify signature with JWKS if time allows, else check iss/aud/exp/nonce and note it in DECISIONS), read `sub` and `workspaces`. Create session in Redis `sess:<random>` TTL 8 h; cookie `sid` HttpOnly, SameSite=Lax, Path=/. Redirect to `WEB_ORIGIN`.
-- `/api/me`: session -> `{sub, workspaces:[{id, role}]}`; `401` without.
-- Guard: `requireMember(workspace)` -> `401` no session, `403` not a member.
+**E. Events and WebSocket**
+- `emit`: `seq = counters.findOneAndUpdate({_id: ws}, {$inc: {seq: 1}}, {upsert: true, returnDocument: 'after'})`; `events.insertOne`; `redis.publish('ev:' + ws, frame)`.
+- One Redis subscriber per instance (`psubscribe ev:*`), dispatching to local sockets of that workspace.
+- Upgrade `/ws?workspace=&after=`: session from cookie (Redis); no session or not a member -> write `HTTP/1.1 401`/`403` and destroy, no upgrade.
+- Per socket keep `lastSent`. Subscribe first and buffer; replay `events.find({workspace, seq: {$gt: after}}).sort(seq)`; then drain buffer.
+- **Gap filling (needed for strictly increasing seq with several instances):** for a live frame with `seq <= lastSent` drop it; with `seq > lastSent + 1` first read `events` with `seq > lastSent` from Mongo and send them in order; if a seq is still missing (counter bumped, insert not yet visible), wait up to 300 ms and re-read, then move on.
+- No `after` given: start from the current counter value (live only).
 
-**Grader**: token check first (`401`). `reset` deletes all app collections + Redis app keys (keep `sess:`). `snapshot` builds the shape from Mongo, inbound sorted like the UI.
+**F. Auth (OIDC code + PKCE S256)**
+- `/auth/login`: discovery (cached), random `state`, `nonce`, `verifier`; `SET oidc:<state> {verifier, nonce} EX 600`; 302 to authorize with `code_challenge` (S256), `redirect_uri = OIDC_REDIRECT_URI`, `scope=openid profile email`.
+- `/auth/callback`: `GETDEL oidc:<state>` (missing -> 400); POST token (form: grant_type, code, redirect_uri, client_id, client_secret, code_verifier); verify id_token RS256 with JWKS (`crypto.createPublicKey({key: jwk, format: 'jwk'})`), check iss, aud, exp, nonce. Session `sess:<32 random bytes hex>` = `{sub, name, workspaces}` EX 8 h. Cookie `sid` HttpOnly, SameSite=Lax, Path=/ (Secure when https). 302 to `WEB_ORIGIN`.
+- `/api/me` -> `{sub, workspaces: [{id, role}]}` exactly; `401` without. `POST /auth/logout` deletes the session.
+- `member(ws)` guard: `401` no session, `403` not a member.
 
-## 6. Security checklist
-- HMAC on the **raw** body, `timingSafeEqual`, 5-minute window, reject future timestamps beyond skew too.
-- Grader token compared in constant time; never log secrets; `.env` ignored.
-- Session ids: 32 random bytes, HttpOnly cookie, server-side store, logout deletes it.
-- Tenant isolation: workspace comes from the verified session; every query filters by it; WS channel per workspace.
-- Input validation (types, lengths), JSON body size limit, no stack traces in responses.
-- CORS: only `WEB_ORIGIN` with credentials (Vite proxy means same origin anyway).
+**G. Grader** (constant-time token check, `401` otherwise)
+- `reset`: delete docs in messages, conversations, events, counters; delete Redis keys `cool:*`, `pace:*` (keep `sess:*`, `oidc:*`). `200`.
+- `snapshot`: from Mongo; inbound sorted `occurred_at, message_id` (same as UI); assignee or null; outbound `client_ref -> status`.
+- `reply`, `claim`: call the same functions as the UI.
 
-## 7. Concurrency checklist (why each piece is safe)
+## 6. Security
+- Raw-body HMAC, constant-time compare, 5-minute window (both directions).
+- Grader token constant-time compare; secrets only from env; `.env` gitignored.
+- Sessions server-side in Redis, opaque random id, HttpOnly + SameSite cookie, logout.
+- ID token signature, issuer, audience, expiry, nonce verified; PKCE S256; state single-use.
+- Tenant: workspace membership from the session; every query filtered; WS channel per workspace.
+- Validation and body size limits; generic error bodies; no stack traces.
+
+## 7. Concurrency map
 | Race | Defence |
 |---|---|
-| Same webhook twice, two instances at once | unique index, E11000 = ok |
-| Same `client_ref` twice at the same instant | unique index on outbox and message |
-| Six agents claim at once | single conditional `updateOne` |
-| Two workers send the same outbox row | atomic claim with lease; Idempotency-Key as second line |
-| Late `sent` after `delivered` | rank-guarded conditional update |
-| Rate limit across instances | Redis Lua bucket + shared cooldown key |
-| WS frames from another copy | Redis pub/sub; seq from Mongo counter |
-| Kill after 202, before send | outbox row already durable; lease expiry -> resend with same key |
+| Same webhook twice / on two instances | unique index, E11000 = ok |
+| Same `client_ref` at the same instant | unique index on outbound message |
+| 6 agents claim at once (existing or new conversation) | single conditional upsert, E11000 -> 409 |
+| Two workers pick one send | lease claim via `findOneAndUpdate`; Idempotency-Key as backstop |
+| Kill after 202, before/while sending | doc already durable; lease expires; resend with same key |
+| Late `sent` after `delivered`, duplicate statuses | rank-guarded update |
+| Rate limit across instances | Redis pacer + shared cool-off key |
+| WS frames produced on other instances | Redis pub/sub + gap filling from `events` |
 
-## 8. Build plan (boxes). Commit at the end of every box.
+## 8. Build plan (boxes; commit after each box)
 
-**Phase A: the check can start + inbound (target 0:15-0:40)**
-- A1 `app.ts`/`index.ts` boot with readiness, `/healthz`, PORT from env. Run `npm run scaffold:install`.
-- A2 `mongo.ts` collections + indexes.
-- A3 grader auth + `reset` + `snapshot`.
-- A4 webhook: raw body, signature, stale, 400/401/2xx rules, inbound insert, status update.
-- A5 run `npm run check` -> inbound checks green. COMMIT.
+**Phase A: check can start, inbound correct (~25 min)**
+- A1 Install deps (`npm run scaffold:install`, add `ws`). `index.ts`/`app.ts`: readiness, `/healthz`, PORT.
+- A2 `store.ts` + indexes.
+- A3 Grader token, `reset`, `snapshot`.
+- A4 Webhook (signature, 400/401/200 table, inbound insert, status update).
+- A5 `npm run check`: inbound_complete, no_duplicates, order, isolation, forged, stale, ack_speed PASS. **Commit.**
 
-**Phase B: outbound + claim (0:40-1:00)**
-- B1 `pigeon.ts` client with timeout + Idempotency-Key.
-- B2 `ratelimit.ts` (Lua bucket + cooldown).
-- B3 `outbox.ts` enqueue + worker with lease/backoff.
-- B4 `/__grader/reply`, `/__grader/claim`.
-- B5 `npm run check` -> level 1 full. COMMIT.
+**Phase B: outbound and claim (~20 min)**
+- B1 `pigeon.ts`, B2 `pacer.ts` (Lua), B3 `outbox.ts` worker, B4 `/__grader/reply` + `/__grader/claim`.
+- B5 `npm run check`: all level 1 PASS. **Commit.**
 
-**Phase C: login, tenant, real time (1:00-1:20)**
-- C1 `events.ts` (seq + events + publish), wire emits into webhook/reply/claim.
-- C2 `auth.ts` + `/auth/login`, `/auth/callback`, `/api/me`, guard, `/api/conversations`.
-- C3 `ws.ts` upgrade with auth, replay, live.
-- C4 `npm run check -- --levels 5`. COMMIT.
+**Phase C: login, tenant, real time (~20 min)**
+- C1 `events.ts` and emits from webhook/reply/claim.
+- C2 `auth.ts` + routes + `/api/me` + `/api/conversations` (paginated, newest first).
+- C3 `ws.ts` (auth, replay, live, gap fill).
+- C4 `npm run check -- --levels 5`: all PASS. **Commit.**
 
-**Phase D: survive (1:20-1:30)**
-- D1 `npm run check:full`; fix level 2/3 findings (lease length, boot recovery, cooldown). COMMIT.
+**Phase D: survive (~10 min)**
+- D1 `npm run check:full`; tune lease/backoff; fix anything in levels 2/3. **Commit.**
 
-**Phase E: UI and docs (1:30-1:50)**
-- E1 React: login button, workspace picker, inbox list (paginated), conversation view, reply box with status, claim/close/reopen, WS hook with `after=lastSeq` reconnect.
-- E2 API for UI: `GET /api/conversations/:contact/messages`, `POST .../reply`, `.../claim`, `.../close`, `.../reopen`.
-- E3 DECISIONS.md, README, 2-3 unit tests (signature, status rank), export ai-logs. COMMIT.
+**Phase E: UI and docs (~20 min)**
+- E1 UI API: `GET /api/conversations/:contact/messages`, `POST .../reply`, `.../claim`, `.../release`, `.../close`, `.../reopen`.
+- E2 React: login, workspace picker, inbox (paginated), thread view, reply with live status, claim/close/reopen, WS hook reconnecting with `after=lastSeq`.
+- E3 Tests (signature verify, status rank, claim race), DECISIONS.md, README, ai-logs export. **Commit.**
 
-**Phase F (1:50-2:00):** `docs/provided/SUBMISSION.md`.
+**Phase F (1:50):** follow `docs/provided/SUBMISSION.md`.
 
-**Skip unless everything above is green:** encrypted notes, Elasticsearch search, billing.
+Cut unless all green: encrypted notes, Elasticsearch search, billing.
 
-## 9. Where it breaks / where we can get stuck (and the fix)
-| Risk | Symptom | Fix |
+## 9. Traps and fixes
+| Trap | Symptom | Fix |
 |---|---|---|
-| Signature on parsed body | every webhook 401 | `express.raw({type:'*/*'})` on the webhook route only, before `express.json` |
-| `/healthz` before Mongo ready, or crash when Mongo slow | check says instance not healthy in 90 s | boot retries connections; healthz waits for ready |
-| Port hard-coded | check scores 0 | `config.port` from `PORT` only |
-| Session/PKCE kept in memory | level 5 login fails behind LB | Redis for state and sessions |
-| Status moves backwards | `status_lifecycle` fails | rank-guarded update |
-| Worker hammers Pigeon in outage | outage penalty | backoff + jitter, cap rate |
-| 429 ignored by another instance | `multi_retry_after` 0 | shared Redis cooldown key |
-| Lease too long | failover > 60 s | lease 15 s, renew if a send takes long |
-| WS replay misses frames between replay and live | `socket_replay` partial | subscribe before replay, buffer, dedupe by seq |
-| Dev server still on :4000 | check: port in use | stop dev server before `npm run check` |
-| `tsx` / TS 7 type errors | none at runtime (tsx strips types) | don't block on `typecheck`; fix later |
-| AI usage limit hit | stall | switch tool, export logs from both |
+| HMAC over parsed JSON | all webhooks 401 | raw body on that route only |
+| healthz 200 before DB ready / crash on slow Mongo | instance not healthy in 90 s | retry connects; ready flag |
+| hard-coded port | score 0 | `PORT` only |
+| PKCE state or session in memory | L5 login fails behind LB | Redis |
+| outbox in a separate collection | status webhook for unknown ref after crash | outbound message doc is the outbox |
+| bursting 8 then fighting 429 | `sentDuringCoolOff` > 0 | pacing at < 4/s + shared cool-off |
+| tight retries in outage | outage penalty | backoff + pacing |
+| status regress | lifecycle mismatch | rank guard |
+| WS frames out of order across instances | `seq NOT increasing` | lastSent + gap fill |
+| subscribe after replay | missed frames | subscribe, buffer, replay, drain |
+| lease too long | failover > 60 s | 10 s lease |
+| dev server on :4000 during check | "port in use" | stop it first |
+| emitting event before insert succeeded | duplicate frames | emit only on new insert / matched update |
 
-## 10. Definition of done (per level)
-- L1: `npm run check` all PASS.
-- L5: `npm run check -- --levels 5` all PASS.
-- L2/L3: `npm run check:full` with no FAIL lines; any PART explained in DECISIONS.md.
-- Repo: README, DECISIONS, CHECK_REPORT.json, ai-logs/, switchboard.json correct, no `.env`, no `node_modules`.
+## 10. Done means
+- L1: `npm run check` all PASS. L5: `--levels 5` all PASS. L2/L3: `check:full` no FAIL; any PART explained in DECISIONS.md.
+- Repo has README, DECISIONS, switchboard.json, CHECK_REPORT.json, ai-logs/; no `.env`, no `node_modules`.
+
+## 11. Known accepted gaps (write in DECISIONS.md if unchanged)
+- A kill between storing an inbound message and emitting its event loses that WS frame (data itself is safe). Fix would be an `emitted` flag swept on boot.
+- Redis is treated as durable enough for sessions, pacing and pub/sub; a Redis restart logs users out.
