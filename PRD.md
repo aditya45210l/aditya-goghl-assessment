@@ -138,6 +138,14 @@ Release/close/reopen are similar conditional updates.
 - `/auth/callback`: `GETDEL oidc:<state>` (missing -> 400); POST token (form: grant_type, code, redirect_uri, client_id, client_secret, code_verifier); verify id_token RS256 with JWKS (`crypto.createPublicKey({key: jwk, format: 'jwk'})`), check iss, aud, exp, nonce. Session `sess:<32 random bytes hex>` = `{sub, name, workspaces}` EX 8 h. Cookie `sid` HttpOnly, SameSite=Lax, Path=/ (Secure when https). 302 to `WEB_ORIGIN`.
 - `/api/me` -> `{sub, workspaces: [{id, role}]}` exactly; `401` without. `POST /auth/logout` deletes the session.
 - `member(ws)` guard: `401` no session, `403` not a member.
+- From `REFERENCE.html` (login provider section), also handled:
+  - The IdP signing key and `kid` **change on every IdP restart**: cache JWKS by `kid`, and on an unknown `kid` refetch `/jwks` once before rejecting. Never hard-code the key.
+  - The code works **once** and expires after **60 s**: exchange immediately in the callback, never retry with the same code.
+  - `redirect_uri` must match exactly between `/authorize` and `/token` (use `OIDC_REDIRECT_URI` for both).
+  - Client secret is optional; if sent it must be right. We send it (form body).
+  - No refresh tokens and no IdP logout: our own session TTL (8 h) decides; `POST /auth/logout` deletes our session.
+  - Roles are only data; we enforce them. Decision: `agent` and `admin` can both read, reply, claim, close and reopen; only `admin` can take over (reassign) a conversation another agent holds. Record in DECISIONS.md.
+  - `workspaces` comes from the verified ID token (not `/userinfo`), so one round trip less.
 
 **G. Grader** (constant-time token check, `401` otherwise)
 - `reset`: delete docs in messages, conversations, events, counters; delete Redis keys `cool:*`, `pace:*` (keep `sess:*`, `oidc:*`). `200`.
