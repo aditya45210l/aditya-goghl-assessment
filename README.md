@@ -20,9 +20,11 @@ Configuration comes from the environment; defaults match `.env.example`, so no `
 ## Check it
 
 ```bash
-npm run check              # level 1 (stop the dev server first: the check starts its own)
+scripts/stop-dev.sh        # stop dev servers first (only LISTENING processes; never kill Docker's :4000 connections)
+npm run check              # level 1 (the check starts its own server)
 npm run check:full         # levels 1, 2, 3, 5; writes CHECK_REPORT.json
 npm --prefix scaffold/server test   # unit tests (signature, cookie, claim races, close/reopen permissions)
+node scripts/e2e-selftest.mjs       # our workflow test: webhooks, replies, claims, login, tenants, pagination, WebSocket, rate limit
 node scripts/billing-selftest.mjs   # bonus billing scenario against the Paybox simulator (needs the server on :4000; wipes dev data)
 ```
 

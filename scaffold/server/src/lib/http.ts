@@ -3,9 +3,9 @@ import { timingSafeEqual } from 'node:crypto';
 
 // Lets route handlers be async; errors go to the error middleware instead of crashing.
 export const handle =
-  (fn: (req: Request, res: Response) => Promise<unknown>): RequestHandler =>
+  (fn: (req: Request, res: Response, next?: NextFunction) => Promise<unknown>): RequestHandler =>
   (req, res, next) => {
-    fn(req, res).catch(next);
+    fn(req, res, next).catch(next);
   };
 
 export function sendError(res: Response, status: number, message: string) {

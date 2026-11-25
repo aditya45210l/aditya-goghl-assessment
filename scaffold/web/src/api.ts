@@ -41,8 +41,10 @@ export const api = {
   conversations: (ws: string, before?: string) =>
     request<{ items: Conversation[]; next: string | null }>('GET', '/api/conversations' + q(ws) + (before ? '&before=' + encodeURIComponent(before) : '')),
   conversation: (ws: string, contact: string) => request<Conversation>('GET', conv(contact) + q(ws)),
-  messages: (ws: string, contact: string) => request<{ items: Message[] }>('GET', conv(contact) + '/messages' + q(ws)),
-  // client_ref is made here, so a retried click is still one reply on the server
+  // newest page first; `before` = cursor of the oldest message already shown, to load older ones
+  messages: (ws: string, contact: string, before?: string) =>
+    request<{ items: Message[]; older: string | null }>('GET', conv(contact) + '/messages' + q(ws) + (before ? '&before=' + encodeURIComponent(before) : '')),
+  // client_ref is made here, per message; the server turns a repeated client_ref into one reply
   reply: (ws: string, contact: string, text: string) =>
     request('POST', conv(contact) + '/reply' + q(ws), { text, client_ref: crypto.randomUUID() }),
   claim: (ws: string, contact: string, takeover = false) => request('POST', conv(contact) + '/claim' + q(ws), { takeover }),

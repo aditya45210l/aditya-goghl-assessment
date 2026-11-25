@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { Router, type Request, type Response } from 'express';
 import { config } from '../config.js';
+import { getRedis } from '../redis.js';
+import { readSessionId } from '../lib/auth.js';
 import { handle, sendError } from '../lib/http.js';
 import { getSession, roleIn, type Session } from '../lib/auth.js';
 import { enqueueReply } from '../lib/outbox.js';
@@ -21,6 +23,23 @@ apiRouter.use('/api', (req, res, next) => {
   if (!req.is('application/json')) return sendError(res, 415, 'send JSON');
   next();
 });
+
+// Rate limit for state-changing calls: 30 per 10 seconds per signed-in browser, counted in Redis so the
+// limit holds across every instance behind the load balancer (a fixed window: INCR, expire on first hit).
+const API_LIMIT = 30;
+const API_WINDOW_MS = 10_000;
+apiRouter.use('/api', handle(async (req, res, next) => {
+  if (req.method === 'GET') return next!();
+  const who = readSessionId(req.headers.cookie) ?? req.ip ?? 'anon';
+  const key = 'rl:api:' + who + ':' + Math.floor(Date.now() / API_WINDOW_MS);
+  const count = await getRedis().incr(key);
+  if (count === 1) await getRedis().pexpire(key, API_WINDOW_MS);
+  if (count > API_LIMIT) {
+    res.setHeader('Retry-After', String(Math.ceil(API_WINDOW_MS / 1000)));
+    return sendError(res, 429, 'too many requests, slow down');
+  }
+  next!();
+}));
 
 type Access = { session: Session; workspace: string; role: string };
 
@@ -67,7 +86,9 @@ apiRouter.get('/api/conversations/:contact/messages', handle(async (req, res) =>
   if (!a) return;
   const contact = contactOf(req, res);
   if (!contact) return;
-  res.json({ items: await listMessages(a.workspace, contact) });
+  const before = typeof req.query.before === 'string' ? req.query.before : null;
+  const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+  res.json(await listMessages(a.workspace, contact, before, limit));
 }));
 
 apiRouter.post('/api/conversations/:contact/reply', handle(async (req, res) => {

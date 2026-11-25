@@ -93,9 +93,9 @@ export function Billing({ workspace, refreshKey }: Props) {
   const price = b.price_per_seat_cents ?? 1200;
 
   return (
-    <div className="scroll-thin flex-1 overflow-y-auto bg-surface p-4 md:p-8">
+    <div className="scroll-thin flex-1 overflow-y-auto p-4 md:p-8">
       <div className="mx-auto flex max-w-2xl flex-col gap-4">
-        <Card>
+        <Card className="rounded-xl">
           <CardHeader>
             <div className="flex items-center gap-2">
               <CardTitle>Subscription</CardTitle>
@@ -115,7 +115,7 @@ export function Billing({ workspace, refreshKey }: Props) {
         {error && <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
 
         {subscribed ? (
-          <Card>
+          <Card className="rounded-xl">
             <CardHeader>
               <CardTitle>Seats</CardTitle>
               <CardDescription>
@@ -137,7 +137,7 @@ export function Billing({ workspace, refreshKey }: Props) {
             </CardContent>
           </Card>
         ) : (
-          <Card>
+          <Card className="rounded-xl">
             <CardHeader>
               <CardTitle className="flex items-center gap-2"><CreditCard className="size-4" /> Subscribe</CardTitle>
               <CardDescription>

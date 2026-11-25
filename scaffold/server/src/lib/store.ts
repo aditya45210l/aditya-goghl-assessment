@@ -63,7 +63,7 @@ export async function deleteAllData() {
   const c = await collections();
   await Promise.all([c.messages.deleteMany({}), c.conversations.deleteMany({}), c.events.deleteMany({}), c.counters.deleteMany({}), c.billing.deleteMany({})]);
   const redis = getRedis();
-  for (const pattern of ['cool:*', 'pace:*']) {
+  for (const pattern of ['cool:*', 'pace:*', 'rl:*']) {
     const keys = await redis.keys(pattern); // few keys, so KEYS is fine here
     if (keys.length) await redis.del(...keys);
   }

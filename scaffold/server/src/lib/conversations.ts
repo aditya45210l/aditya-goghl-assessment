@@ -97,11 +97,28 @@ export async function getConversation(workspace: string, contact: string) {
   return c ? toSummary(c) : null;
 }
 
-// One conversation's latest 500 messages, shown oldest first (the same order as the grader snapshot).
-export async function listMessages(workspace: string, contact: string) {
+// One page of a conversation's messages, newest page first, each page shown oldest first (same order as
+// the grader snapshot). `before` = "<occurredAt ISO>|<id>" of the oldest message already shown.
+// Returns `older`: the cursor for the next older page, or null when there is nothing older.
+// Uses the index (workspace, contact, occurredAt, key), so a page costs the same however long the history is.
+export async function listMessages(workspace: string, contact: string, before: string | null, limit = 50) {
   const { messages } = await collections();
-  const newest = await messages.find({ workspace, contact }).sort({ occurredAt: -1, key: -1 }).limit(500).toArray();
-  return newest.reverse().map((m) => ({
-    id: m.key, direction: m.dir, text: m.text, at: m.occurredAt, status: m.dir === 'out' ? m.status : undefined,
-  }));
+  const filter: Record<string, unknown> = { workspace, contact };
+  const [iso, key] = (before ?? '').split('|');
+  const at = new Date(iso);
+  if (before && !isNaN(at.getTime())) {
+    filter.$or = [{ occurredAt: { $lt: at } }, { occurredAt: at, key: { $lt: key ?? '' } }];
+  }
+  // one extra row tells us whether an older page exists
+  const rows = await messages
+    .find(filter, { projection: { key: 1, dir: 1, text: 1, occurredAt: 1, status: 1 } })
+    .sort({ occurredAt: -1, key: -1 })
+    .limit(limit + 1)
+    .toArray();
+  const page = rows.slice(0, limit).reverse();
+  const oldest = page[0];
+  return {
+    items: page.map((m) => ({ id: m.key, direction: m.dir, text: m.text, at: m.occurredAt, status: m.dir === 'out' ? m.status : undefined })),
+    older: rows.length > limit && oldest ? oldest.occurredAt.toISOString() + '|' + oldest.key : null,
+  };
 }

@@ -5,8 +5,8 @@ import { deleteSession, finishLogin, getSession, LOGIN_COOKIE, loginStateCookie,
 
 export const authRouter = Router();
 
-authRouter.get('/auth/login', handle(async (_req, res) => {
-  const { url, state } = await startLogin();
+authRouter.get('/auth/login', handle(async (req, res) => {
+  const { url, state } = await startLogin(typeof req.query.login === 'string' ? req.query.login : undefined);
   res.setHeader('set-cookie', loginStateCookie(state));
   res.redirect(302, url);
 }));

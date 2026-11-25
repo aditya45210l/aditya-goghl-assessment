@@ -65,7 +65,9 @@ export function readCookie(cookieHeader: string | undefined, name: string): stri
   return null;
 }
 
-export async function startLogin(): Promise<{ url: string; state: string }> {
+// `loginHint` is only for the mock IdP: its `login=<sub>` parameter skips its plain user list, so our own
+// sign-in page can offer the test users. The OIDC flow (state, nonce, PKCE) is exactly the same.
+export async function startLogin(loginHint?: string): Promise<{ url: string; state: string }> {
   const state = randomId();
   const nonce = randomId();
   const verifier = randomId();
@@ -82,6 +84,7 @@ export async function startLogin(): Promise<{ url: string; state: string }> {
     code_challenge_method: 'S256',
     state,
     nonce,
+    ...(loginHint && /^u_[a-z0-9_]{1,40}$/i.test(loginHint) ? { login: loginHint } : {}),
   }).toString();
   return { url: url.toString(), state };
 }

@@ -110,3 +110,17 @@
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
 }
+
+/* every clickable thing shows a pointer (Tailwind v4 resets buttons to the default cursor) */
+@layer base {
+  button:not(:disabled), [role="button"], a[href], select, summary, label[for] { cursor: pointer; }
+  button:disabled { cursor: not-allowed; }
+}
+
+/* small entrance animations */
+@keyframes fade-up { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@layer components {
+  .animate-fade-up { animation: fade-up 0.25s ease-out both; }
+  .animate-fade-in { animation: fade-in 0.2s ease-out both; }
+}

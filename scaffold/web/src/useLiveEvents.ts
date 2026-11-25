@@ -35,9 +35,9 @@ export function useLiveEvents(workspace: string | null, onFrame: (f: LiveFrame) 
         handler.current(frame);
       };
       socket.onclose = (e) => {
+        if (stopped) return; // an old socket from before a workspace switch: ignore it
         setConnected(false);
         if (e.code === 4001) { location.reload(); return; } // signed out elsewhere
-        if (stopped) return;
         timer = setTimeout(connect, retryMs);
         retryMs = Math.min(retryMs * 2, 8000); // back off while the server is away
       };
