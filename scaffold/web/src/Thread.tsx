@@ -99,7 +99,11 @@ export function Thread({ workspace, contact, me, role, refreshKey }: Props) {
       </div>
 
       <footer className="border-t p-3">
-        {heldByMe ? (
+        {heldByMe && closed ? (
+          <div className="mx-auto flex max-w-3xl items-center gap-2 rounded-md border border-dashed px-4 py-2 text-sm text-muted-foreground">
+            <Lock className="size-4" /> This conversation is closed. Reopen it to reply.
+          </div>
+        ) : heldByMe ? (
           <form onSubmit={send} className="mx-auto flex max-w-3xl gap-2">
             <Input value={text} onChange={(e) => setText(e.target.value)} placeholder="Write a reply…" maxLength={4096} autoFocus />
             <Button type="submit" disabled={!text.trim()}><Send /> Send</Button>

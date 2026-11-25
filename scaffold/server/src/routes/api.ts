@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Router, type Request, type Response } from 'express';
+import { config } from '../config.js';
 import { handle, sendError } from '../lib/http.js';
 import { getSession, roleIn, type Session } from '../lib/auth.js';
 import { enqueueReply } from '../lib/outbox.js';
@@ -8,6 +9,17 @@ import {
 } from '../lib/conversations.js';
 
 export const apiRouter = Router();
+
+// CSRF guard for every state-changing API call. A cookie is sent with any same-site request,
+// so we also require (1) a JSON body, which a plain HTML form cannot send, and (2) if the
+// browser says where the request comes from, that it is our own web app.
+apiRouter.use('/api', (req, res, next) => {
+  if (req.method === 'GET') return next();
+  const origin = req.headers.origin;
+  if (origin && origin !== config.webOrigin) return sendError(res, 403, 'cross-site request refused');
+  if (!req.is('application/json')) return sendError(res, 415, 'send JSON');
+  next();
+});
 
 type Access = { session: Session; workspace: string; role: string };
 
@@ -22,7 +34,14 @@ async function requireMember(req: Request, res: Response): Promise<Access | null
   return { session, workspace, role };
 }
 
-const contactOf = (req: Request) => String(req.params.contact);
+// Contacts are phone numbers in E.164 form (+ and 6 to 15 digits), exactly as Pigeon sends them.
+// Rejecting anything else stops agents from creating junk conversations.
+const CONTACT = /^\+\d{6,15}$/;
+function contactOf(req: Request, res: Response): string | null {
+  const contact = String(req.params.contact);
+  if (!CONTACT.test(contact)) return sendError(res, 400, 'contact must be a phone number like +14155550101'), null;
+  return contact;
+}
 
 apiRouter.get('/api/conversations', handle(async (req, res) => {
   const a = await requireMember(req, res);
@@ -35,7 +54,9 @@ apiRouter.get('/api/conversations', handle(async (req, res) => {
 apiRouter.get('/api/conversations/:contact', handle(async (req, res) => {
   const a = await requireMember(req, res);
   if (!a) return;
-  const conversation = await getConversation(a.workspace, contactOf(req));
+  const contact = contactOf(req, res);
+  if (!contact) return;
+  const conversation = await getConversation(a.workspace, contact);
   if (!conversation) return sendError(res, 404, 'no such conversation');
   res.json(conversation);
 }));
@@ -43,31 +64,38 @@ apiRouter.get('/api/conversations/:contact', handle(async (req, res) => {
 apiRouter.get('/api/conversations/:contact/messages', handle(async (req, res) => {
   const a = await requireMember(req, res);
   if (!a) return;
-  res.json({ items: await listMessages(a.workspace, contactOf(req)) });
+  const contact = contactOf(req, res);
+  if (!contact) return;
+  res.json({ items: await listMessages(a.workspace, contact) });
 }));
 
 apiRouter.post('/api/conversations/:contact/reply', handle(async (req, res) => {
   const a = await requireMember(req, res);
   if (!a) return;
+  const contact = contactOf(req, res);
+  if (!contact) return;
   const text = req.body?.text;
   if (typeof text !== 'string' || !text.trim() || text.length > 4096) return sendError(res, 400, 'text is required');
-  // Product rule: an agent replies only to a conversation they hold, so two agents never answer
-  // the same customer at once. (The grader's /__grader/reply is the "system" path and skips this.)
-  const conversation = await getConversation(a.workspace, contactOf(req));
+  // Product rules: an agent replies only to a conversation they hold (two agents never answer the
+  // same customer at once) and that is open. /__grader/reply is the "system" path and skips this.
+  const conversation = await getConversation(a.workspace, contact);
   if (conversation?.assignee !== a.session.sub) return sendError(res, 409, 'claim this conversation before replying');
+  if (conversation.state === 'closed') return sendError(res, 409, 'reopen this conversation before replying');
   // the browser sends its own client_ref so a retried click is still one reply
   const clientRef = typeof req.body.client_ref === 'string' && req.body.client_ref ? req.body.client_ref.slice(0, 200) : randomUUID();
-  await enqueueReply(a.workspace, contactOf(req), text, clientRef);
+  await enqueueReply(a.workspace, contact, text, clientRef);
   res.status(202).json({ client_ref: clientRef, status: 'queued' });
 }));
 
 apiRouter.post('/api/conversations/:contact/claim', handle(async (req, res) => {
   const a = await requireMember(req, res);
   if (!a) return;
-  const won = await claimConversation(a.workspace, contactOf(req), a.session.sub);
+  const contact = contactOf(req, res);
+  if (!contact) return;
+  const won = await claimConversation(a.workspace, contact, a.session.sub);
   if (won) return res.json({ assignee: a.session.sub });
   if (a.role === 'admin' && req.body?.takeover) {
-    await takeOverConversation(a.workspace, contactOf(req), a.session.sub);
+    await takeOverConversation(a.workspace, contact, a.session.sub);
     return res.json({ assignee: a.session.sub });
   }
   sendError(res, 409, 'held by another agent');
@@ -76,21 +104,26 @@ apiRouter.post('/api/conversations/:contact/claim', handle(async (req, res) => {
 apiRouter.post('/api/conversations/:contact/release', handle(async (req, res) => {
   const a = await requireMember(req, res);
   if (!a) return;
-  const ok = await releaseConversation(a.workspace, contactOf(req), a.session.sub, a.role === 'admin');
+  const contact = contactOf(req, res);
+  if (!contact) return;
+  const ok = await releaseConversation(a.workspace, contact, a.session.sub, a.role === 'admin');
   if (!ok) return sendError(res, 409, 'you do not hold this conversation');
   res.json({ assignee: null });
 }));
 
-apiRouter.post('/api/conversations/:contact/close', handle(async (req, res) => {
-  const a = await requireMember(req, res);
-  if (!a) return;
-  await setConversationState(a.workspace, contactOf(req), 'closed');
-  res.json({ state: 'closed' });
-}));
+// Close and reopen share one handler: holder, anyone if unassigned, or an admin.
+function stateRoute(state: 'open' | 'closed') {
+  return handle(async (req, res) => {
+    const a = await requireMember(req, res);
+    if (!a) return;
+    const contact = contactOf(req, res);
+    if (!contact) return;
+    const result = await setConversationState(a.workspace, contact, state, a.session.sub, a.role === 'admin');
+    if (result === 'missing') return sendError(res, 404, 'no such conversation');
+    if (result === 'forbidden') return sendError(res, 409, 'another agent holds this conversation');
+    res.json({ state });
+  });
+}
 
-apiRouter.post('/api/conversations/:contact/reopen', handle(async (req, res) => {
-  const a = await requireMember(req, res);
-  if (!a) return;
-  await setConversationState(a.workspace, contactOf(req), 'open');
-  res.json({ state: 'open' });
-}));
+apiRouter.post('/api/conversations/:contact/close', stateRoute('closed'));
+apiRouter.post('/api/conversations/:contact/reopen', stateRoute('open'));

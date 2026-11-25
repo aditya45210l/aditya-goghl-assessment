@@ -40,7 +40,8 @@ webhookRouter.post(
     }
 
     if (event.type === 'message.status') {
-      if (!isText(data.client_ref) || !isText(data.status)) return sendError(res, 400, 'missing fields');
+      // a status we cannot match to one of our replies is "a status for a message you never sent": 2xx, ignore
+      if (!isText(data.client_ref) || !isText(data.status)) return res.status(200).json({ ok: true, ignored: 'status' });
       await applyStatus(event.workspace, data.client_ref, data.status);
       return res.status(200).json({ ok: true });
     }

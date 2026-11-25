@@ -50,7 +50,22 @@ async function verifyIdToken(idToken: string, nonce: string): Promise<Record<str
 // ----------------------------------------------------------- login flow
 // Step 1: build the IdP URL. state, nonce and the PKCE verifier are kept in Redis,
 // because the callback may land on a different instance.
-export async function startLogin(): Promise<string> {
+// The state is also kept in a short cookie on the browser that started the login, and the callback
+// requires both to match. Otherwise an attacker could send a victim their own callback link and sign
+// the victim into the attacker's account (login CSRF).
+export const LOGIN_COOKIE = 'login_state';
+export function loginStateCookie(state: string, maxAgeSeconds = LOGIN_STATE_TTL_SECONDS) {
+  return `${LOGIN_COOKIE}=${state}; HttpOnly; SameSite=Lax; Path=/auth; Max-Age=${maxAgeSeconds}`;
+}
+export function readCookie(cookieHeader: string | undefined, name: string): string | null {
+  for (const part of (cookieHeader ?? '').split(';')) {
+    const [key, ...rest] = part.trim().split('=');
+    if (key === name) return rest.join('=') || null;
+  }
+  return null;
+}
+
+export async function startLogin(): Promise<{ url: string; state: string }> {
   const state = randomId();
   const nonce = randomId();
   const verifier = randomId();
@@ -68,7 +83,7 @@ export async function startLogin(): Promise<string> {
     state,
     nonce,
   }).toString();
-  return url.toString();
+  return { url: url.toString(), state };
 }
 
 // Step 2: the browser comes back with ?code&state. Exchange the code (it works once,
@@ -115,11 +130,7 @@ export function sessionCookie(sid: string, maxAgeSeconds = SESSION_TTL_SECONDS) 
 }
 
 export function readSessionId(cookieHeader: string | undefined): string | null {
-  for (const part of (cookieHeader ?? '').split(';')) {
-    const [name, ...rest] = part.trim().split('=');
-    if (name === SESSION_COOKIE) return rest.join('=') || null;
-  }
-  return null;
+  return readCookie(cookieHeader, SESSION_COOKIE);
 }
 
 // Session for an HTTP request or a WebSocket upgrade (both carry the cookie header).
@@ -132,7 +143,9 @@ export async function getSession(req: Pick<Request, 'headers'>): Promise<Session
 
 export async function deleteSession(req: Pick<Request, 'headers'>) {
   const sid = readSessionId(req.headers.cookie);
-  if (sid) await getRedis().del('sess:' + sid);
+  if (!sid) return;
+  await getRedis().del('sess:' + sid);
+  await getRedis().publish('sessions:logout', sid); // close this session's live sockets everywhere
 }
 
 export function roleIn(session: Session, workspace: string): string | null {

@@ -14,6 +14,6 @@ export function verifyPigeonSignature(rawBody: Buffer, header: string | undefine
   const expected = createHmac('sha256', secret).update(t + '.').update(rawBody).digest('hex');
   if (!safeEqual(expected, v1.toLowerCase())) return 'bad';
 
-  const ageSeconds = Math.abs(Date.now() / 1000 - t);
+  const ageSeconds = Math.abs(Math.floor(Date.now() / 1000) - t);
   return ageSeconds > WEBHOOK_MAX_AGE_SECONDS ? 'stale' : 'ok';
 }

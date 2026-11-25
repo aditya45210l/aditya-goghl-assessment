@@ -99,7 +99,7 @@ Status rank: queued 0, sent 1, delivered 2, failed 2 (terminal; first terminal w
 1. Signature: parse `t=..,v1=..`; HMAC-SHA256 of `t + "." + rawBody`; `timingSafeEqual`; bad/missing -> `401`; `|now - t| > 300 s` -> `401`. Never 5xx here.
 2. `JSON.parse` fails or required fields missing -> `400`.
 3. Unknown workspace (not in configured keys) or unknown `type` -> `200`, ignore.
-4. `message.inbound`: insert message (`occurred_at` from event). E11000 -> already stored, `200`. Upsert conversation `{$max: {lastActivityAt}}`, `$setOnInsert: {assignee: null, state: 'open'}`; if it was closed, reopen on new inbound (decision). Emit `message.inbound` only when newly inserted. `200`.
+4. `message.inbound`: insert message (`occurred_at` from event). E11000 -> already stored, `200`. Upsert conversation `{$max: {lastActivityAt}}`, `$setOnInsert: {assignee: null, state: 'open'}`; a closed conversation stays closed on new inbound (decision, see DECISIONS.md). Emit `message.inbound` only when newly inserted. `200`.
 5. `message.status`: `updateOne({workspace, dir:'out', key: client_ref, rank: {$lt: r}}, {$set: {status, rank}})`. Matched -> emit `message.status`. Not matched (unknown ref or not newer) -> `200`.
 6. Mongo down -> `503` so Pigeon retries (the only intended 5xx). Target latency: < 50 ms.
 

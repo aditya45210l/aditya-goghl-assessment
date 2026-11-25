@@ -26,12 +26,17 @@ Core design (all state in MongoDB/Redis, any instance can die at any line):
 - **Billing bonus (Paybox)**: not built.
 - **UI**: shadcn/ui components (Tailwind v4) with inbox filters, live status badges and claim-to-reply. On any live change it refetches the visible lists instead of patching
   state; simple and correct, but more requests than necessary. A thread shows the latest 500 messages.
+- **Process safety net**: unexpected errors are logged instead of killing the process (work is lease-based, so a
+  crash would lose nothing, but staying up is better); a server that cannot bind its port exits.
 
 ## Decisions where the brief was silent
 - Inbound order is by `occurred_at`, then message id (what Pigeon's report calls the true order).
 - A reply to a workspace we do not know is `404`; missing fields are `400`.
 - Roles: `agent` and `admin` can both read, reply, claim, release their own, close and reopen.
   Only `admin` can take over or release a conversation someone else holds.
+- Close/reopen: the holder, anyone if nobody holds it, or an admin. Closing keeps the assignee. Replies to a
+  closed conversation are refused (409, "reopen first"); claiming a closed one is allowed.
+- Contacts in the agent API must be E.164 phone numbers (`+` and 6-15 digits), so no junk conversations.
 - An agent can reply only to a conversation they hold (409 otherwise; the UI shows "Claim to reply").
   `/__grader/reply` is the system path and does not require a claim, as the contract says.
 - A new customer message does not reopen a closed conversation automatically; it moves it to the top of the inbox.
@@ -49,8 +54,9 @@ Core design (all state in MongoDB/Redis, any instance can die at any line):
   running (seen once in development when the container was recreated), duplicates can slip in until the next
   reset or restart; a restart then refuses to become ready until they are removed, rather than run unprotected.
 - Redis is treated as durable enough for sessions and pacing; a Redis restart signs everyone out.
-- No CSRF token: cookies are `SameSite=Lax` and state-changing routes are JSON POSTs, which blocks the usual
-  cross-site form attack, but a stricter setup would add an explicit token.
+- CSRF: no token. State-changing `/api` calls must be JSON (a plain HTML form cannot send it) and, when the
+  browser sends `Origin`, it must equal `WEB_ORIGIN`; WebSocket upgrades check `Origin` the same way. Cookies are
+  `SameSite=Lax`. Login state is bound to the browser with a short `login_state` cookie (stops login CSRF).
 - Failed send attempts are logged (workspace, client_ref, reason; never message text or keys) and the last
   error is stored on the message, but there are no metrics or dashboards.
 - Unit tests are few: signature checking, cookie parsing and the claim race. The rest is covered by the

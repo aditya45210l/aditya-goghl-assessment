@@ -21,8 +21,11 @@ export async function enqueueReply(workspace: string, contact: string, text: str
       send: { state: 'pending', nextAt: now, attempts: 0, leaseUntil: null, owner: null },
     });
   } catch (err) {
-    if (isDup(err)) return; // already queued
-    throw err;
+    if (!isDup(err)) throw err;
+    // already queued. Still make sure its conversation exists: if we were killed right after
+    // the insert last time, this retry repairs it ($max makes it harmless to repeat).
+    await touchConversation(workspace, contact, now);
+    return;
   }
   await touchConversation(workspace, contact, now);
   await emitSafely(workspace, { type: 'message.status', contact, client_ref: clientRef, status: 'queued' });
@@ -68,9 +71,12 @@ async function retryLater(job: Document, delayMs: number, countAttempt: boolean,
   );
 }
 
-async function finish(job: Document, fields: Record<string, unknown>) {
+// Only the current lease owner may finish a job: if our lease expired and another instance
+// took the job over, our late result must not overwrite theirs. Returns true if we still owned it.
+async function finish(job: Document, fields: Record<string, unknown>): Promise<boolean> {
   const { messages } = await collections();
-  await messages.updateOne({ _id: job._id }, { $set: { 'send.leaseUntil': null, ...fields } });
+  const res = await messages.updateOne({ _id: job._id, 'send.owner': workerId }, { $set: { 'send.leaseUntil': null, ...fields } });
+  return res.matchedCount > 0;
 }
 
 async function processJob(job: Document) {
@@ -94,7 +100,7 @@ async function processJob(job: Document) {
   // rejected: Pigeon will never take it. Mark the reply failed so the agent sees it.
   const { messages } = await collections();
   console.warn(`send rejected ws=${job.workspace} client_ref=${job.key} status=${result.status}`);
-  await finish(job, { 'send.state': 'failed', 'send.lastError': 'rejected with ' + result.status });
+  if (!(await finish(job, { 'send.state': 'failed', 'send.lastError': 'rejected with ' + result.status }))) return;
   const updated = await messages.updateOne(
     { _id: job._id, rank: { $lt: STATUS_RANK.failed } },
     { $set: { status: 'failed', rank: STATUS_RANK.failed } },

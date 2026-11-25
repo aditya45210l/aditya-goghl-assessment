@@ -9,8 +9,9 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   const res = await fetch(path, {
     method,
     credentials: 'include',
-    headers: body ? { 'content-type': 'application/json' } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
+    // every POST carries a JSON body: the server refuses state changes that are not JSON (CSRF guard)
+    headers: method === 'GET' ? undefined : { 'content-type': 'application/json' },
+    body: method === 'GET' ? undefined : JSON.stringify(body ?? {}),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw Object.assign(new Error(data.error || 'request failed'), { status: res.status });

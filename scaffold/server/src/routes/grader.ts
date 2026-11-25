@@ -7,12 +7,13 @@ import { claimConversation } from '../lib/conversations.js';
 
 export const graderRouter = Router();
 
-// Every /__grader route needs the x-grader-token header.
-graderRouter.use('/__grader', (req: Request, res: Response, next: NextFunction) => {
+// Every /__grader route needs the x-grader-token header. app.ts mounts this before the JSON
+// parser, so a request without the token gets 401 even if its body is broken.
+export function requireGraderToken(req: Request, res: Response, next: NextFunction) {
   const token = req.header('x-grader-token') || '';
   if (!safeEqual(token, config.graderToken)) return sendError(res, 401, 'bad grader token');
   next();
-});
+}
 
 graderRouter.post(
   '/__grader/reset',
@@ -29,6 +30,7 @@ graderRouter.get(
     const c = await collections();
     const workspaces: Record<string, { contacts: Record<string, any>; outbound: Record<string, string> }> = {};
     const wsOf = (id: string) => (workspaces[id] ??= { contacts: {}, outbound: {} });
+    for (const id of Object.keys(config.pigeon.apiKeys)) wsOf(id); // every workspace appears, even when empty
     const contactOf = (ws: string, contact: string) => (wsOf(ws).contacts[contact] ??= { inbound: [], assignee: null });
 
     for (const conv of await c.conversations.find().toArray()) {

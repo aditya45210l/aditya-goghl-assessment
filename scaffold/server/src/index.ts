@@ -24,10 +24,20 @@ async function connectWithRetry() {
   }
 }
 
+// Last line of defence: log instead of dying on a stray error. Even if the process did die,
+// nothing would be lost (all work is in MongoDB with leases), but staying up is better.
+process.on('unhandledRejection', (err) => console.error('unhandled rejection:', (err as Error)?.message ?? err));
+process.on('uncaughtException', (err) => console.error('uncaught exception:', err.message));
+
 async function main() {
   const server = createServer(createApp());
   attachWebSocket(server);
-  // listen first so /healthz can say "not ready yet" (503) instead of refusing connections
+  // listen first so /healthz can say "not ready yet" (503) instead of refusing connections.
+  // If the port cannot be used (e.g. already taken), exit: a process that cannot serve is useless.
+  server.on('error', (err) => {
+    console.error('server error:', err.message);
+    process.exit(1);
+  });
   server.listen(config.port, () => console.log(`server on http://localhost:${config.port}`));
 
   await connectWithRetry();
