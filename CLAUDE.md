@@ -21,3 +21,4 @@ App listens on :4000. 2-hour timebox; the brief is intentionally bigger than the
 - README and DECISIONS.md must state what is NOT done and what would happen. Do not claim unverified behavior.
 
 @AGENTS.md
+@PRD.md
