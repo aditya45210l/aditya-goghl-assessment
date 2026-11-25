@@ -1,17 +1,44 @@
-import express from 'express';
 import { createServer } from 'node:http';
 import { config } from './config.js';
+import { getDb } from './db.js';
+import { getRedis } from './redis.js';
+import { ensureIndexes } from './lib/store.js';
+import { createApp, state } from './app.js';
 
-const app = express();
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-app.get('/healthz', (_req, res) => {
-  res.json({ ok: true });
-});
+// Wait for MongoDB and Redis instead of crashing: they may start after us.
+async function connectWithRetry() {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await (await getDb()).command({ ping: 1 });
+      await getRedis().ping();
+      await ensureIndexes();
+      return;
+    } catch (err) {
+      console.error(`storage not ready (attempt ${attempt}):`, (err as Error).message);
+      await sleep(Math.min(2000, 200 * attempt));
+    }
+  }
+}
 
-// Everything else is yours.
+async function main() {
+  const server = createServer(createApp());
+  // listen first so /healthz can say "not ready yet" (503) instead of refusing connections
+  server.listen(config.port, () => console.log(`server on http://localhost:${config.port}`));
 
-// A plain http server, so you can attach WebSockets to it.
-const server = createServer(app);
-server.listen(config.port, () => {
-  console.log(`server on http://localhost:${config.port}`);
-});
+  await connectWithRetry();
+  state.ready = true;
+  console.log('ready');
+
+  // graceful stop on SIGTERM / Ctrl+C. A kill -9 skips this, which is why all state is in MongoDB/Redis.
+  const stop = () => {
+    state.ready = false;
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 3000).unref();
+  };
+  process.on('SIGTERM', stop);
+  process.on('SIGINT', stop);
+}
+
+main();
