@@ -5,14 +5,17 @@ import { STATUS_RANK } from './constants.js';
 // Store a message a customer sent. Safe to call any number of times for the same message.
 export async function storeInboundMessage(workspace: string, messageId: string, contact: string, text: string, occurredAt: Date) {
   const { messages } = await collections();
+  let isNew = true;
   try {
     await messages.insertOne({ workspace, dir: 'in', key: messageId, contact, text, occurredAt, createdAt: new Date() });
   } catch (err) {
-    if (isDup(err)) return; // already stored by an earlier delivery (or another instance)
-    throw err;
+    if (!isDup(err)) throw err;
+    isNew = false; // already stored by an earlier delivery (or another instance)
   }
+  // Always (re)touch the conversation: if we were killed right after the insert last time,
+  // the retry repairs it. It is idempotent ($max), so doing it twice is harmless.
   await touchConversation(workspace, contact, occurredAt);
-  await emitSafely(workspace, { type: 'message.inbound', contact, message_id: messageId });
+  if (isNew) await emitSafely(workspace, { type: 'message.inbound', contact, message_id: messageId });
 }
 
 // Apply a delivery status from Pigeon to a reply we sent.

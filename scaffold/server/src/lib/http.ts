@@ -20,9 +20,11 @@ export function safeEqual(a: string, b: string): boolean {
 }
 
 // Last middleware: log the error, answer a generic 500 (or 503 if the database is unreachable).
-export function errorHandler(err: Error, _req: Request, res: Response, _next: NextFunction) {
-  console.error('request failed:', err.message);
+// Client mistakes found by body parsers (bad JSON 400, too large 413) keep their 4xx: bad input is never a 5xx.
+export function errorHandler(err: Error & { status?: number }, _req: Request, res: Response, _next: NextFunction) {
   if (res.headersSent) return;
+  if (err.status && err.status >= 400 && err.status < 500) return sendError(res, err.status, 'bad request');
+  console.error('request failed:', err.message);
   const dbDown = /ECONNREFUSED|topology|server selection|connection/i.test(err.message);
   sendError(res, dbDown ? 503 : 500, dbDown ? 'storage unavailable, retry' : 'internal error');
 }
