@@ -108,8 +108,13 @@ export function attachWebSocket(server: Server) {
     }
   });
 
-  // One Redis subscription per instance; frames go to this instance's sockets of that workspace.
-  const subscriber = getRedis().duplicate();
+}
+
+// One Redis subscription per instance; frames go to this instance's sockets of that workspace.
+// Started after Redis is reachable (index.ts), and with unlimited retries so that the
+// subscription survives Redis blips instead of silently giving up.
+export function startLiveFanout() {
+  const subscriber = getRedis().duplicate({ maxRetriesPerRequest: null });
   subscriber.psubscribe('ev:*').catch((err) => console.error('redis subscribe failed:', err.message));
   // logout on any instance closes that session's sockets on every instance
   subscriber.subscribe(LOGOUT_CHANNEL).catch((err) => console.error('redis subscribe failed:', err.message));

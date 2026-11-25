@@ -15,6 +15,8 @@ export async function collections() {
     events: db.collection('events') as Collection<Document>,
     // one per workspace: the last `seq` handed out
     counters: db.collection('counters') as Collection<Document>,
+    // one per workspace: its Paybox customer/subscription and the last known state (bonus: billing)
+    billing: db.collection('billing') as Collection<Document>,
   };
 }
 
@@ -27,6 +29,8 @@ export async function ensureIndexes() {
   await c.conversations.createIndex({ workspace: 1, contact: 1 }, { unique: true });
   await c.conversations.createIndex({ workspace: 1, lastActivityAt: -1 });
   await c.events.createIndex({ workspace: 1, seq: 1 }, { unique: true });
+  await c.billing.createIndex({ workspace: 1 }, { unique: true });
+  await c.billing.createIndex({ subscriptionId: 1 });
 }
 
 // MongoDB duplicate key error: the thing already exists.
@@ -57,7 +61,7 @@ export async function touchConversation(workspace: string, contact: string, at: 
 // Wipe application data (grader reset). Login sessions are kept.
 export async function deleteAllData() {
   const c = await collections();
-  await Promise.all([c.messages.deleteMany({}), c.conversations.deleteMany({}), c.events.deleteMany({}), c.counters.deleteMany({})]);
+  await Promise.all([c.messages.deleteMany({}), c.conversations.deleteMany({}), c.events.deleteMany({}), c.counters.deleteMany({}), c.billing.deleteMany({})]);
   const redis = getRedis();
   for (const pattern of ['cool:*', 'pace:*']) {
     const keys = await redis.keys(pattern); // few keys, so KEYS is fine here

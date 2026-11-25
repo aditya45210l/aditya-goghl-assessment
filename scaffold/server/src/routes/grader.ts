@@ -4,6 +4,7 @@ import { handle, safeEqual, sendError } from '../lib/http.js';
 import { collections, deleteAllData, isKnownWorkspace } from '../lib/store.js';
 import { enqueueReply } from '../lib/outbox.js';
 import { claimConversation } from '../lib/conversations.js';
+import { billingState, canSend, changeSeats, subscribeWorkspace } from '../lib/billing.js';
 
 export const graderRouter = Router();
 
@@ -28,7 +29,7 @@ graderRouter.get(
   '/__grader/snapshot',
   handle(async (_req, res) => {
     const c = await collections();
-    const workspaces: Record<string, { contacts: Record<string, any>; outbound: Record<string, string> }> = {};
+    const workspaces: Record<string, { contacts: Record<string, any>; outbound: Record<string, string>; billing?: unknown }> = {};
     const wsOf = (id: string) => (workspaces[id] ??= { contacts: {}, outbound: {} });
     for (const id of Object.keys(config.pigeon.apiKeys)) wsOf(id); // every workspace appears, even when empty
     const contactOf = (ws: string, contact: string) => (wsOf(ws).contacts[contact] ??= { inbound: [], assignee: null });
@@ -44,6 +45,11 @@ graderRouter.get(
       contactOf(m.workspace, m.contact);
       wsOf(m.workspace).outbound[m.key] = m.status;
     }
+    // bonus: billing state per workspace (status, seats, can_send)
+    for (const id of Object.keys(workspaces)) {
+      const b = await billingState(id);
+      workspaces[id].billing = { status: b.status, seats: b.seats, can_send: b.can_send };
+    }
     res.status(200).json({ workspaces });
   }),
 );
@@ -57,6 +63,8 @@ graderRouter.post(
     const { workspace, contact, text, client_ref } = req.body ?? {};
     if (!isKnownWorkspace(workspace)) return sendError(res, 404, 'unknown workspace');
     if (!isText(contact, 64) || !isText(text) || !isText(client_ref, 200)) return sendError(res, 400, 'contact, text and client_ref are required');
+    // a canceled subscription cannot send (402) and nothing is queued
+    if (!(await canSend(workspace))) return sendError(res, 402, 'subscription canceled: sending is paused');
     await enqueueReply(workspace, contact, text, client_ref);
     res.status(202).json({ ok: true, client_ref });
   }),
@@ -72,5 +80,30 @@ graderRouter.post(
     const won = await claimConversation(workspace, contact, agent);
     if (!won) return sendError(res, 409, 'held by another agent');
     res.status(200).json({ ok: true, assignee: agent });
+  }),
+);
+
+const isSeats = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= 1 && (v as number) <= 1000;
+
+// What the admin's billing form does once the browser has turned the card into a token.
+graderRouter.post(
+  '/__grader/billing/subscribe',
+  handle(async (req, res) => {
+    const { workspace, seats, token } = req.body ?? {};
+    if (!isKnownWorkspace(workspace)) return sendError(res, 404, 'unknown workspace');
+    if (!isSeats(seats) || !isText(token, 200)) return sendError(res, 400, 'seats and token are required');
+    const out = await subscribeWorkspace(workspace, seats, token);
+    res.status(out.ok ? 200 : 402).json({ ...out, billing: await billingState(workspace) });
+  }),
+);
+
+graderRouter.post(
+  '/__grader/billing/seats',
+  handle(async (req, res) => {
+    const { workspace, seats } = req.body ?? {};
+    if (!isKnownWorkspace(workspace)) return sendError(res, 404, 'unknown workspace');
+    if (!isSeats(seats)) return sendError(res, 400, 'seats must be a whole number from 1 to 1000');
+    const out = await changeSeats(workspace, seats);
+    res.status(out.ok ? 200 : 402).json({ ...out, billing: await billingState(workspace) });
   }),
 );

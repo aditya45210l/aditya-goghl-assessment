@@ -4,6 +4,7 @@ import { config } from '../config.js';
 import { handle, sendError } from '../lib/http.js';
 import { getSession, roleIn, type Session } from '../lib/auth.js';
 import { enqueueReply } from '../lib/outbox.js';
+import { canSend } from '../lib/billing.js';
 import {
   claimConversation, getConversation, listConversations, listMessages, releaseConversation, setConversationState, takeOverConversation,
 } from '../lib/conversations.js';
@@ -25,7 +26,7 @@ type Access = { session: Session; workspace: string; role: string };
 
 // Tenant guard used by every API route: 401 without a session, 403 if not a member.
 // The workspace always comes from the request and is checked against the session's memberships.
-async function requireMember(req: Request, res: Response): Promise<Access | null> {
+export async function requireMember(req: Request, res: Response): Promise<Access | null> {
   const session = await getSession(req);
   if (!session) return sendError(res, 401, 'not signed in'), null;
   const workspace = String(req.query.workspace ?? req.body?.workspace ?? '');
@@ -81,6 +82,7 @@ apiRouter.post('/api/conversations/:contact/reply', handle(async (req, res) => {
   const conversation = await getConversation(a.workspace, contact);
   if (conversation?.assignee !== a.session.sub) return sendError(res, 409, 'claim this conversation before replying');
   if (conversation.state === 'closed') return sendError(res, 409, 'reopen this conversation before replying');
+  if (!(await canSend(a.workspace))) return sendError(res, 402, 'subscription canceled: sending is paused, ask an admin');
   // the browser sends its own client_ref so a retried click is still one reply
   const clientRef = typeof req.body.client_ref === 'string' && req.body.client_ref ? req.body.client_ref.slice(0, 200) : randomUUID();
   await enqueueReply(a.workspace, contact, text, clientRef);

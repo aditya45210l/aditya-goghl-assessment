@@ -5,7 +5,7 @@ import { getRedis } from './redis.js';
 import { ensureIndexes } from './lib/store.js';
 import { createApp, state } from './app.js';
 import { startOutboxWorker, stopOutboxWorker } from './lib/outbox.js';
-import { attachWebSocket } from './lib/ws.js';
+import { attachWebSocket, startLiveFanout } from './lib/ws.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -41,6 +41,7 @@ async function main() {
   server.listen(config.port, () => console.log(`server on http://localhost:${config.port}`));
 
   await connectWithRetry();
+  startLiveFanout(); // before "ready", so no socket connects before live frames flow
   state.ready = true;
   startOutboxWorker(); // also picks up replies left unsent by an instance that died
   console.log('ready');

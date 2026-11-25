@@ -47,8 +47,9 @@ export async function takeOverConversation(workspace: string, contact: string, a
 // Holder gives the conversation back (admins may release anyone's).
 export async function releaseConversation(workspace: string, contact: string, agent: string, isAdmin: boolean) {
   const { conversations } = await collections();
-  const filter = isAdmin ? { workspace, contact } : { workspace, contact, assignee: agent };
-  const res = await conversations.updateOne({ ...filter, assignee: { $ne: null } }, { $set: { assignee: null } });
+  // agents release only their own; admins release whoever holds it
+  const filter = isAdmin ? { workspace, contact, assignee: { $ne: null } } : { workspace, contact, assignee: agent };
+  const res = await conversations.updateOne(filter, { $set: { assignee: null } });
   if (res.modifiedCount) await emitSafely(workspace, { type: 'conversation.assigned', contact, assignee: null });
   return res.modifiedCount > 0;
 }

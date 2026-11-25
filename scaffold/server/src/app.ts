@@ -1,5 +1,7 @@
 import express from 'express';
 import { webhookRouter } from './routes/webhook.js';
+import { payboxWebhookRouter } from './routes/paybox-webhook.js';
+import { billingRouter } from './routes/billing.js';
 import { graderRouter, requireGraderToken } from './routes/grader.js';
 import { authRouter } from './routes/auth.js';
 import { apiRouter } from './routes/api.js';
@@ -26,11 +28,13 @@ export function createApp() {
   });
 
   app.use(webhookRouter); // must come before express.json(): it needs the raw body
+  app.use(payboxWebhookRouter); // same: raw body for the signature
   app.use('/__grader', requireGraderToken); // token first, so no token = 401 whatever the body is
   app.use(express.json({ limit: '100kb' }));
   app.use(graderRouter);
   app.use(authRouter);
   app.use(apiRouter);
+  app.use(billingRouter);
 
   app.use(errorHandler);
   return app;
